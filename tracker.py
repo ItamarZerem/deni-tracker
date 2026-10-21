@@ -304,12 +304,17 @@ def check() -> None:
 
 # ---------------------------------------------------------------- לוח זמנים
 
+HORIZON_DAYS = 45
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "deni.yml")
 
 
 def gen() -> None:
+    # ‏אופק של 45 יום: לוח מלא לכל העונה יוצא ~236 שורות cron, ולא ברור ש-GitHub
+    # ‏מקבל כאלה. ‏המק מרענן כל יום (refresh.sh), כך שהאופק מתגלגל קדימה. ‏אם המק
+    # ‏כבוי יותר מ-45 יום ברצף - המעקב נעצר.
+    now = now_utc()
     games = [g for g in team_games(current_team_id())
-             if g["tip"] > now_utc() - dt.timedelta(hours=6)]
+             if now - dt.timedelta(hours=6) < g["tip"] < now + dt.timedelta(days=HORIZON_DAYS)]
     # ‏איחוד: כל המשחקים באותה שעה ובאותו חודש נכנסים לשורה אחת עם רשימת ימים
     # ‏('3 1 22,24,30 10 *'). ‏בלי זה יש ~400 שורות, ולא ברור ש-GitHub מקבל כאלה.
     slots = {}

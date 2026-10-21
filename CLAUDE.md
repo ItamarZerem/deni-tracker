@@ -61,7 +61,9 @@ DENI_DRY=1 DENI_NOW=2026-10-22T01:03Z uv run -q --with pypdf python3 tracker.py 
 `DENI_DRY` מדפיס במקום לשלוח, ו-`DENI_NOW` מזייף את השעה.
 
 ## יומן
-- 21.10.26: הוקם. דני Questionable (קרסול ימין) לפתיחת העונה מול פיניקס, 22.10 05:00 שעון ישראל.
+- 21.10.26: הוקם. הריפו `git@github.com:ItamarZerem/deni-tracker.git` (פרטי) נוצר בידי איתמר
+  מהטלפון: התוסף של Chrome לא מורשה לפעול ב-accounts.google.com, והכניסה ל-GitHub במק היא
+  דרך Google. דני Questionable (קרסול ימין) לפתיחת העונה מול פיניקס, 22.10 05:00 שעון ישראל.
   הריפואים של איתמר ב-GitHub שנבדקו: `siddur-hayom` (פרטי) כולל workflow אחד ידני בלבד, כלומר
   0 דקות; `siddurHayomWeb` ציבורי, ולכן חינם. ריפו פרטי שלא משוכפל במק לא נבדק, אפשר לראות
   אותו ב-github.com/settings/billing.

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """מעקב בלי ספוילרים אחרי דני אבדיה.
 
-שתי פקודות:
-  check  - רץ ב-GitHub Actions בזמנים שנקבעו לפי לוח המשחקים. לפני משחק: בודק את
-           דוח הפציעות. אחרי משחק: בודק אם דני שיחק, ושולח הודעה אחת ל-ntfy.
-  gen    - בונה מחדש את שורות ה-cron ב-.github/workflows/deni.yml לפי לוח המשחקים
-           (רץ על המק, ראו refresh.sh).
+‏`python3 tracker.py check` רץ ב-GitHub Actions כל 10 דקות. ‏כל ריצה קוראת את לוח
+המשחקים בעצמה ומחליטה לפי חלון הזמן סביב המשחק הקרוב: לפני (דוח פציעות), במהלך
+(«על המגרש») ואחרי (שיחק / לא / פחות מ-10). ‏מחוץ לחלונות - יוצאת בלי לעשות כלום.
+‏אין לוח זמנים שצריך לרענן, ואין תלות במק.
 
 ⛔ כלל הברזל: שום תוצאה, ניקוד, סטטיסטיקה או מנצח לא נכתבים להודעה ולא ללוג
 (הלוגים של Actions נראים בדף הריפו). מה שמותר לצאת: שיחק / לא שיחק / פחות מ-10 דק',
@@ -34,14 +33,14 @@ ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 ESPN_WEB = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
 ICON = f"https://a.espncdn.com/i/headshots/nba/players/full/{PLAYER_ID}.png"
 
-# זמני הבדיקה ביחס לתחילת המשחק, בדקות. ‏השליחה אחרי המשחק נעשית בשעה קבועה
-# (‎+3:15) ולא «ברגע שנגמר», כדי ששעת ההתראה עצמה לא תסגיר משחק צמוד או הארכה.
-# ‏+4:15 ו-+5:30 הן רשת ביטחון למשחק שעוד לא נגמר, ל-cron של GitHub שמתעכב,
-# או לריצה שנפלה.
-PRE_OFFSETS = [-60, -25]
-IN_OFFSETS = [12, 35]
-POST_OFFSETS = [195, 255, 330]
-POST_EARLIEST = 180   # ‏לפני זה, ריצה «אחרי המשחק» לא עושה כלום
+# ‏חלונות הבדיקה ביחס לתחילת המשחק, בדקות. ‏הריצות כל 10 דקות, ובתוך חלון כל ריצה
+# ‏בודקת שוב (ntfy זוכר מה כבר נשלח, אז אין כפילויות). ‏כך גם ריצה שמתעכבת או נופלת
+# ‏ב-GitHub לא מפספסת כלום - הבאה תתפוס.
+# ‏אחרי המשחק: שולחים רק מ-+3:15, ולא «ברגע שנגמר», כדי ששעת ההתראה עצמה לא תסגיר
+# ‏משחק צמוד או הארכה.
+PRE_WINDOW = (-75, 0)     # ‏דוח פציעות
+IN_WINDOW = (10, 150)     # ‏«דני על המגרש»
+POST_WINDOW = (195, 360)  # ‏סיכום הבוקר
 
 STATUS_HE = {
     "Out": "❌ דני לא ישחק הלילה",
@@ -233,7 +232,7 @@ POSTPONED = ("STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_SUSPENDED")
 
 
 def in_game(game: dict, keys: set) -> None:
-    """‏12 ו-35 דקות אחרי הפתיחה: ברגע שברור שדני על המגרש - הודעה, כדי שגם מי
+    """‏בחלון IN_WINDOW: ברגע שברור שדני על המגרש - הודעה, כדי שגם מי
     שמתעורר באמצע המשחק יידע שהוא לא נפצע לפני ושבאמת התחיל לשחק. ‏אם עדיין לא
     נכנס - שותקים, ההודעה של אחרי המשחק תכריע."""
     gid = game["id"]
@@ -287,91 +286,21 @@ def check() -> None:
     now = now_utc()
     games = team_games(current_team_id())
     near = [g for g in games
-            if now - dt.timedelta(minutes=POST_OFFSETS[-1] + 60) <= g["tip"] <= now + dt.timedelta(minutes=90)]
+            if now - dt.timedelta(minutes=POST_WINDOW[1]) <= g["tip"] <= now - dt.timedelta(minutes=PRE_WINDOW[0])]
     if not near:
         print("אין משחק קרוב")
         return
     game = min(near, key=lambda g: abs((g["tip"] - now).total_seconds()))
     delta = (now - game["tip"]).total_seconds() / 60
-    keys = sent_keys()
-    if delta < 0:
-        pre_game(game, keys)
-    elif delta >= POST_EARLIEST:
-        post_game(game, keys)
+    if PRE_WINDOW[0] <= delta < PRE_WINDOW[1]:
+        pre_game(game, sent_keys())
+    elif IN_WINDOW[0] <= delta < IN_WINDOW[1]:
+        in_game(game, sent_keys())
+    elif POST_WINDOW[0] <= delta <= POST_WINDOW[1]:
+        post_game(game, sent_keys())
     else:
-        in_game(game, keys)
-
-
-# ---------------------------------------------------------------- לוח זמנים
-
-HORIZON_DAYS = 45
-# ‏GitHub רץ 5 דקות אחרי המק (שרץ ב-+3), כדי ששניהם לא ירוצו באותה דקה ושהבדיקה
-# ‏«כבר נשלח» דרך ntfy תספיק למנוע כפילות.
-GITHUB_LAG = 8
-WORKFLOW = os.path.join(ROOT, ".github", "workflows", "deni.yml")
-
-
-def gen() -> None:
-    # ‏אופק של 45 יום: לוח מלא לכל העונה יוצא ~236 שורות cron, ולא ברור ש-GitHub
-    # ‏מקבל כאלה. ‏המק מרענן כל יום (refresh.sh), כך שהאופק מתגלגל קדימה. ‏אם המק
-    # ‏כבוי יותר מ-45 יום ברצף - המעקב נעצר.
-    now = now_utc()
-    games = [g for g in team_games(current_team_id())
-             if now - dt.timedelta(hours=6) < g["tip"] < now + dt.timedelta(days=HORIZON_DAYS)]
-    # ‏איחוד: כל המשחקים באותה שעה ובאותו חודש נכנסים לשורה אחת עם רשימת ימים
-    # ‏('3 1 22,24,30 10 *'). ‏בלי זה יש ~400 שורות, ולא ברור ש-GitHub מקבל כאלה.
-    slots = {}
-    for g in games:
-        for off in PRE_OFFSETS + IN_OFFSETS + POST_OFFSETS:
-            # ‏דקה «עקומה» (לא 00/30): ב-GitHub ריצות בראש השעה מתעכבות ונופלות יותר.
-            t = g["tip"] + dt.timedelta(minutes=off + GITHUB_LAG)
-            slots.setdefault((t.month, t.hour, t.minute), set()).add(t.day)
-    lines = [f"    - cron: '{mi} {h} {','.join(map(str, sorted(days)))} {mo} *'"
-             for (mo, h, mi), days in sorted(slots.items())]
-    write_launchd(games)
-    text = open(WORKFLOW).read()
-    begin, end = "    # >>> נוצר אוטומטית\n", "    # <<< נוצר אוטומטית\n"
-    head, rest = text.split(begin)
-    _, tail = rest.split(end)
-    new = head + begin + "\n".join(lines) + "\n" + end + tail
-    if new != text:
-        open(WORKFLOW, "w").write(new)
-        print(f"עודכן: {len(games)} משחקים, {len(lines)} זמני בדיקה")
-    else:
-        print("ללא שינוי")
-
-
-LAUNCHD_LABEL = "com.itamar.deni-tracker.check"
-LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
-
-
-def write_launchd(games: list) -> None:
-    """‏הבדיקות עצמן רצות מהמק (launchd), ו-GitHub Actions הוא רק גיבוי: בלילה
-    הראשון (22.10.26) GitHub לא הפעיל אף אחת מ-4 הבדיקות המתוזמנות, בזמן שהמק
-    היה ער כל הלילה (מחובר לחשמל, caffeinate). ‏launchd עובד בשעון המקומי.
-    ‏רק במק (darwin) - ב-Actions אין מה לכתוב."""
-    if sys.platform != "darwin":
-        return
-    import plistlib
-    times = sorted({(g["tip"] + dt.timedelta(minutes=off + 3)).astimezone()
-                    for g in games for off in PRE_OFFSETS + IN_OFFSETS + POST_OFFSETS})
-    py = os.path.join(ROOT, ".venv", "bin", "python3")
-    plist = {
-        "Label": LAUNCHD_LABEL,
-        "ProgramArguments": ["/bin/bash", "-c",
-                             f'cd "{ROOT}" && "{py}" tracker.py check >>check.log 2>&1'],
-        "StartCalendarInterval": [{"Month": t.month, "Day": t.day, "Hour": t.hour, "Minute": t.minute}
-                                  for t in times],
-    }
-    new = plistlib.dumps(plist)
-    old = open(LAUNCHD_PLIST, "rb").read() if os.path.exists(LAUNCHD_PLIST) else b""
-    if new != old:
-        open(LAUNCHD_PLIST, "wb").write(new)
-        uid = os.getuid()
-        os.system(f'launchctl bootout gui/{uid} "{LAUNCHD_PLIST}" 2>/dev/null; '
-                  f'launchctl bootstrap gui/{uid} "{LAUNCHD_PLIST}"')
-        print(f"launchd: {len(times)} זמני בדיקה")
+        print("בדיקה הסתיימה")
 
 
 if __name__ == "__main__":
-    {"check": check, "gen": gen}[sys.argv[1]]()
+    {"check": check}[sys.argv[1]]()

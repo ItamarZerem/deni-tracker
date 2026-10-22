@@ -169,9 +169,11 @@ class PreGame(unittest.TestCase):
 
 
 class Routing(unittest.TestCase):
-    """‏איזו ריצה הולכת לאיזה מסלול, לפי השעה."""
+    """‏איזו ריצה הולכת לאיזה מסלול, לפי השעה. ‏הריצות כל 10 דקות, כך שכל דקה אפשרית."""
     def route(self, now):
         calls = []
+        if isinstance(now, dt.datetime):
+            now = now.strftime("%Y-%m-%dT%H:%MZ")
         with mock.patch.dict("os.environ", {"DENI_NOW": now}), \
              mock.patch.object(tracker, "current_team_id", return_value="22"), \
              mock.patch.object(tracker, "team_games", return_value=[GAME, {"id": "G2", "tip": TIP + dt.timedelta(days=2), "name": "y"}]), \
@@ -182,57 +184,47 @@ class Routing(unittest.TestCase):
             tracker.check()
         return calls
 
-    def test_every_scheduled_offset_routes_correctly(self):
-        for off in tracker.PRE_OFFSETS:
-            t = TIP + dt.timedelta(minutes=off + 3)
-            self.assertEqual(self.route(t.strftime("%Y-%m-%dT%H:%MZ")), [("pre", "G1")], off)
-        for off in tracker.IN_OFFSETS:
-            t = TIP + dt.timedelta(minutes=off + 3)
-            self.assertEqual(self.route(t.strftime("%Y-%m-%dT%H:%MZ")), [("in", "G1")], off)
-        for off in tracker.POST_OFFSETS:
-            t = TIP + dt.timedelta(minutes=off + 3)
-            self.assertEqual(self.route(t.strftime("%Y-%m-%dT%H:%MZ")), [("post", "G1")], off)
+    def test_every_minute_around_the_game(self):
+        """‏כל דקה מ-3 שעות לפני ועד 8 שעות אחרי: המסלול הנכון, או כלום."""
+        for m in range(-180, 480):
+            got = self.route(TIP + dt.timedelta(minutes=m))
+            if -75 <= m < 0:
+                want = [("pre", "G1")]
+            elif 10 <= m < 150:
+                want = [("in", "G1")]
+            elif 195 <= m <= 360:
+                want = [("post", "G1")]
+            else:
+                want = []
+            self.assertEqual(got, want, m)
 
-    def test_github_delay_of_40_minutes_still_works(self):
-        for off in tracker.POST_OFFSETS:
-            t = TIP + dt.timedelta(minutes=off + 43)
-            self.assertEqual(self.route(t.strftime("%Y-%m-%dT%H:%MZ")), [("post", "G1")], off)
+    def test_ten_minute_cadence_hits_every_window(self):
+        """‏ריצות בדקות 4, 14, 24... (כמו ה-cron): כל חלון מקבל לפחות 2 ריצות, בכל שעת פתיחה."""
+        for tip_minute in range(0, 60, 5):
+            tip = TIP.replace(minute=tip_minute)
+            game = {"id": "G1", "tip": tip, "name": "x"}
+            hits = {"pre": 0, "in": 0, "post": 0}
+            t = tip - dt.timedelta(hours=3)
+            t = t.replace(minute=4)
+            while t < tip + dt.timedelta(hours=8):
+                with mock.patch.dict("os.environ", {"DENI_NOW": t.strftime("%Y-%m-%dT%H:%MZ")}), \
+                     mock.patch.object(tracker, "current_team_id", return_value="22"), \
+                     mock.patch.object(tracker, "team_games", return_value=[game]), \
+                     mock.patch.object(tracker, "sent_keys", return_value=set()), \
+                     mock.patch.object(tracker, "pre_game", side_effect=lambda g, k: hits.__setitem__("pre", hits["pre"] + 1)), \
+                     mock.patch.object(tracker, "in_game", side_effect=lambda g, k: hits.__setitem__("in", hits["in"] + 1)), \
+                     mock.patch.object(tracker, "post_game", side_effect=lambda g, k: hits.__setitem__("post", hits["post"] + 1)):
+                    tracker.check()
+                t += dt.timedelta(minutes=10)
+            self.assertTrue(all(v >= 2 for v in hits.values()), (tip_minute, hits))
 
-    def test_mid_game_goes_to_in_game(self):
-        self.assertEqual(self.route("2026-10-22T03:30Z"), [("in", "G1")])
+    def test_post_never_before_3h15(self):
+        """‏שעת ההתראה של הבוקר לא תלויה באורך המשחק."""
+        for m in range(150, 195):
+            self.assertEqual(self.route(TIP + dt.timedelta(minutes=m)), [], m)
 
     def test_far_from_game_does_nothing(self):
         self.assertEqual(self.route("2026-10-23T02:00Z"), [])
-
-
-class Schedule(unittest.TestCase):
-    def test_cron_covers_exactly_the_game_offsets(self):
-        """‏כל שורות ה-cron, אחרי האיחוד, מכסות בדיוק את (משחק × היסט) - לא פחות ולא יותר."""
-        games = [{"id": str(i), "tip": TIP + dt.timedelta(days=d, minutes=m), "name": ""}
-                 for i, (d, m) in enumerate([(0, 0), (2, 0), (3, 30), (9, 0), (10, 90), (40, 0), (41, -420)])]
-        written = {}
-        fake = "x\n    # >>> נוצר אוטומטית\n    # <<< נוצר אוטומטית\ny\n"
-
-        class F:
-            def __init__(self, mode="r"): self.mode = mode
-            def read(self): return fake
-            def write(self, s): written["t"] = s
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-
-        with mock.patch.dict("os.environ", {"DENI_NOW": "2026-10-21T00:00Z"}), \
-             mock.patch.object(tracker, "current_team_id", return_value="22"), \
-             mock.patch.object(tracker, "team_games", return_value=games), \
-             mock.patch.object(tracker, "write_launchd"), \
-             mock.patch("builtins.open", lambda p, mode="r": F(mode)):
-            tracker.gen()
-        fired = set()
-        for mi, h, days, mo in re.findall(r"cron: '(\d+) (\d+) ([\d,]+) (\d+) \*'", written["t"]):
-            for d in days.split(","):
-                fired.add(dt.datetime(2026 if int(mo) >= 10 else 2027, int(mo), int(d), int(h), int(mi), tzinfo=UTC))
-        expected = {g["tip"] + dt.timedelta(minutes=o + tracker.GITHUB_LAG) for g in games
-                    for o in tracker.PRE_OFFSETS + tracker.IN_OFFSETS + tracker.POST_OFFSETS}
-        self.assertEqual(fired, expected)
 
 
 class Misc(unittest.TestCase):

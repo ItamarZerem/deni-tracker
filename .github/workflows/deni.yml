@@ -6,6 +6,11 @@ name: deni
 on:
   workflow_dispatch:
   schedule:
+    # 🧪 ‏ניסוי זמני (22.10.26) - איזה סוג תזמון GitHub באמת מפעיל:
+    - cron: '37 5 22 10 *'
+    - cron: '47 5 22 10 *'
+    - cron: '57 5 22 10 *'
+    - cron: '*/15 * * * *'
     # >>> נוצר אוטומטית
     - cron: '8 1 22,24,30 10 *'
     - cron: '43 1 22,24,30 10 *'
@@ -86,6 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
+      # 🧪 ‏דופק לערוץ דיבאג: מתי רץ ואיזו שורת cron הפעילה. ‏בלי שום מידע על המשחק.
+      - run: curl -s -o /dev/null -d "$(date -u +%H:%M) ${{ github.event_name }} [${{ github.event.schedule }}]" ntfy.sh/deni-debug-q8w3n5x2
       - uses: actions/checkout@v4
       - run: pip install --quiet pypdf
       - run: python3 tracker.py check

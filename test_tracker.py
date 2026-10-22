@@ -223,13 +223,14 @@ class Schedule(unittest.TestCase):
         with mock.patch.dict("os.environ", {"DENI_NOW": "2026-10-21T00:00Z"}), \
              mock.patch.object(tracker, "current_team_id", return_value="22"), \
              mock.patch.object(tracker, "team_games", return_value=games), \
+             mock.patch.object(tracker, "write_launchd"), \
              mock.patch("builtins.open", lambda p, mode="r": F(mode)):
             tracker.gen()
         fired = set()
         for mi, h, days, mo in re.findall(r"cron: '(\d+) (\d+) ([\d,]+) (\d+) \*'", written["t"]):
             for d in days.split(","):
                 fired.add(dt.datetime(2026 if int(mo) >= 10 else 2027, int(mo), int(d), int(h), int(mi), tzinfo=UTC))
-        expected = {g["tip"] + dt.timedelta(minutes=o + 3) for g in games
+        expected = {g["tip"] + dt.timedelta(minutes=o + tracker.GITHUB_LAG) for g in games
                     for o in tracker.PRE_OFFSETS + tracker.IN_OFFSETS + tracker.POST_OFFSETS}
         self.assertEqual(fired, expected)
 

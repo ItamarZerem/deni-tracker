@@ -305,6 +305,9 @@ def check() -> None:
 # ---------------------------------------------------------------- לוח זמנים
 
 HORIZON_DAYS = 45
+# ‏GitHub רץ 5 דקות אחרי המק (שרץ ב-+3), כדי ששניהם לא ירוצו באותה דקה ושהבדיקה
+# ‏«כבר נשלח» דרך ntfy תספיק למנוע כפילות.
+GITHUB_LAG = 8
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "deni.yml")
 
 
@@ -321,10 +324,11 @@ def gen() -> None:
     for g in games:
         for off in PRE_OFFSETS + IN_OFFSETS + POST_OFFSETS:
             # ‏דקה «עקומה» (לא 00/30): ב-GitHub ריצות בראש השעה מתעכבות ונופלות יותר.
-            t = g["tip"] + dt.timedelta(minutes=off + 3)
+            t = g["tip"] + dt.timedelta(minutes=off + GITHUB_LAG)
             slots.setdefault((t.month, t.hour, t.minute), set()).add(t.day)
     lines = [f"    - cron: '{mi} {h} {','.join(map(str, sorted(days)))} {mo} *'"
              for (mo, h, mi), days in sorted(slots.items())]
+    write_launchd(games)
     text = open(WORKFLOW).read()
     begin, end = "    # >>> נוצר אוטומטית\n", "    # <<< נוצר אוטומטית\n"
     head, rest = text.split(begin)
@@ -335,6 +339,38 @@ def gen() -> None:
         print(f"עודכן: {len(games)} משחקים, {len(lines)} זמני בדיקה")
     else:
         print("ללא שינוי")
+
+
+LAUNCHD_LABEL = "com.itamar.deni-tracker.check"
+LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
+
+
+def write_launchd(games: list) -> None:
+    """‏הבדיקות עצמן רצות מהמק (launchd), ו-GitHub Actions הוא רק גיבוי: בלילה
+    הראשון (22.10.26) GitHub לא הפעיל אף אחת מ-4 הבדיקות המתוזמנות, בזמן שהמק
+    היה ער כל הלילה (מחובר לחשמל, caffeinate). ‏launchd עובד בשעון המקומי.
+    ‏רק במק (darwin) - ב-Actions אין מה לכתוב."""
+    if sys.platform != "darwin":
+        return
+    import plistlib
+    times = sorted({(g["tip"] + dt.timedelta(minutes=off + 3)).astimezone()
+                    for g in games for off in PRE_OFFSETS + IN_OFFSETS + POST_OFFSETS})
+    py = os.path.join(ROOT, ".venv", "bin", "python3")
+    plist = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": ["/bin/bash", "-c",
+                             f'cd "{ROOT}" && "{py}" tracker.py check >>check.log 2>&1'],
+        "StartCalendarInterval": [{"Month": t.month, "Day": t.day, "Hour": t.hour, "Minute": t.minute}
+                                  for t in times],
+    }
+    new = plistlib.dumps(plist)
+    old = open(LAUNCHD_PLIST, "rb").read() if os.path.exists(LAUNCHD_PLIST) else b""
+    if new != old:
+        open(LAUNCHD_PLIST, "wb").write(new)
+        uid = os.getuid()
+        os.system(f'launchctl bootout gui/{uid} "{LAUNCHD_PLIST}" 2>/dev/null; '
+                  f'launchctl bootstrap gui/{uid} "{LAUNCHD_PLIST}"')
+        print(f"launchd: {len(times)} זמני בדיקה")
 
 
 if __name__ == "__main__":

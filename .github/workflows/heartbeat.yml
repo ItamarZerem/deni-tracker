@@ -1,0 +1,11 @@
+# 🧪 ‏ניסוי זמני (22.10.26): האם GitHub מפעיל תזמון כלשהו בריפו הזה. ‏למחוק אחרי.
+name: heartbeat
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -s -o /dev/null -d "$(date -u +%H:%M) heartbeat ${{ github.event_name }}" ntfy.sh/deni-debug-q8w3n5x2

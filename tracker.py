@@ -123,7 +123,7 @@ def send(message: str, key: str, priority: int = 3) -> None:
         headers={"Content-Type": "application/json", "User-Agent": "deni-tracker"},
     )
     urllib.request.urlopen(req, timeout=20).read()
-    print("נשלח:", key)
+    print("נשלח")  # ⛔ ‏בלי המפתח: «-in» / «-post» בלוג מסגירים מה קרה
 
 
 # ---------------------------------------------------------------- לפני המשחק
@@ -196,7 +196,7 @@ def pre_game(game: dict, keys: set) -> None:
     if status is None:
         status, source = espn_status(game["id"]), "espn"
     s, reason = status
-    print(f"סטטוס לפני המשחק ({source}): {s}")
+    print(f"מקור: {source}")
     gid = game["id"]
     if s in STATUS_HE:
         key = f"{gid}-pre-{s}"
@@ -238,7 +238,7 @@ def in_game(game: dict, keys: set) -> None:
     נכנס - שותקים, ההודעה של אחרי המשחק תכריע."""
     gid = game["id"]
     if f"{gid}-in" in keys or f"{gid}-post" in keys:
-        print("כבר נשלח")
+        print("בדיקה הסתיימה")
         return
     data = get_json(f"{ESPN}/summary?event={gid}")
     st = game_status(data)
@@ -252,7 +252,7 @@ def in_game(game: dict, keys: set) -> None:
     if starter or minutes > 0:
         send("🏀 דני על המגרש, המשחק התחיל", f"{gid}-in", priority=4)
     else:
-        print("עוד לא נכנס")
+        print("בדיקה הסתיימה")  # ⛔ ‏לא «עוד לא נכנס» - הלוג גלוי, וזה ספוילר
 
 
 def post_game(game: dict, keys: set) -> None:
@@ -267,7 +267,7 @@ def post_game(game: dict, keys: set) -> None:
         send("📅 המשחק של הלילה נדחה", key)
         return
     if not st.get("completed"):
-        print("המשחק עוד לא נגמר, ננסה בריצה הבאה")
+        print("בדיקה הסתיימה")  # ⛔ «עוד לא נגמר» ב-+3:15 מסגיר הארכה
         return
 
     minutes, _ = deni_in_boxscore(data)

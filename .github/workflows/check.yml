@@ -12,7 +12,7 @@ on:
   # ‏ריצה גם כשהקובץ הזה נדחף: לפי דיווחים, בריפו חדש התזמון «מתעורר» רק אחרי ריצה מ-push.
   push:
     branches: [main]
-    paths: ['.github/workflows/deni.yml']
+    paths: ['.github/workflows/check.yml']
   schedule:
     - cron: '4,14,24,34,44,54 * * * *'
 

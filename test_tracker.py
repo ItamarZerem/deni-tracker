@@ -1,5 +1,7 @@
 """בדיקות יחידה: כל מסלולי ההחלטה, בלי רשת. ‏הרצה: python3 -m unittest -v test_tracker"""
 import datetime as dt
+import json
+import os
 import re
 import unittest
 from unittest import mock
@@ -290,6 +292,63 @@ class Watch(unittest.TestCase):
              mock.patch.dict("os.environ", {"GITHUB_OUTPUT": "/dev/null"}):
             tracker.watch()
         self.assertGreater(n[0], 20)
+
+
+class Shabbat(unittest.TestCase):
+    """‏איתמר שומר שבת: הודעות בשבת ממתינות ב-ntfy עד אחרי ההבדלה."""
+    HEB = {"items": [
+        {"category": "candles", "date": "2026-10-23T17:18:00+03:00"},
+        {"category": "parashat", "date": "2026-10-24"},
+        {"category": "havdalah", "date": "2026-10-24T18:34:00+03:00"},
+    ]}
+    RELEASE = dt.datetime(2026, 10, 24, 15, 44, tzinfo=UTC)  # ‏18:34 + 10 דק', שעון ישראל
+
+    def hold(self, now, data=None, fail=False):
+        def gj(url):
+            if fail:
+                raise OSError("down")
+            return data or self.HEB
+        with mock.patch.object(tracker, "get_json", side_effect=gj):
+            return tracker.hold_until(tracker.parse_time(now))
+
+    def test_weekday_not_held(self):
+        self.assertIsNone(self.hold("2026-10-22T20:00Z"))
+
+    def test_shabbat_game_is_held_until_after_havdalah(self):
+        for now in ("2026-10-23T13:30Z", "2026-10-24T01:00Z", "2026-10-24T05:20Z", "2026-10-24T15:40Z"):
+            self.assertEqual(self.hold(now), self.RELEASE, now)
+
+    def test_margins(self):
+        self.assertIsNone(self.hold("2026-10-23T13:17Z"))        # ‏שעה ודקה לפני הדלקה
+        self.assertEqual(self.hold("2026-10-23T13:18Z"), self.RELEASE)
+        self.assertIsNone(self.hold("2026-10-24T15:44Z"))        # ‏משוחרר
+
+    def test_fallback_when_hebcal_down(self):
+        self.assertIsNotNone(self.hold("2026-10-24T05:00Z", fail=True))   # ‏שבת בבוקר
+        self.assertIsNone(self.hold("2026-10-22T20:00Z", fail=True))      # ‏חמישי
+        rel = self.hold("2026-10-23T12:00Z", fail=True)                    # ‏שישי 15:00
+        self.assertEqual(rel.astimezone(dt.timezone(dt.timedelta(hours=3))).strftime("%a %H:%M"), "Sat 20:30")
+
+    def test_send_attaches_delay(self):
+        bodies = []
+        class R:
+            def read(self): return b""
+        with mock.patch.dict("os.environ", {"DENI_NOW": "2026-10-24T05:20Z"}), \
+             mock.patch.object(tracker, "get_json", return_value=self.HEB), \
+             mock.patch("urllib.request.urlopen", side_effect=lambda req, timeout=0: bodies.append(json.loads(req.data)) or R()):
+            os.environ.pop("DENI_DRY", None)
+            tracker.send("x", "k")
+        self.assertEqual(bodies[0]["delay"], str(int(self.RELEASE.timestamp())))
+
+    def test_send_no_delay_on_weekday(self):
+        bodies = []
+        class R:
+            def read(self): return b""
+        with mock.patch.dict("os.environ", {"DENI_NOW": "2026-10-22T05:20Z"}), \
+             mock.patch.object(tracker, "get_json", return_value=self.HEB), \
+             mock.patch("urllib.request.urlopen", side_effect=lambda req, timeout=0: bodies.append(json.loads(req.data)) or R()):
+            tracker.send("x", "k")
+        self.assertNotIn("delay", bodies[0])
 
 
 class Misc(unittest.TestCase):

@@ -92,7 +92,8 @@ def team_games(team_id: str) -> list:
 def sent_keys() -> set:
     """‏ntfy.sh שומר הודעות 12 שעות. ‏משתמשים בזה כזיכרון של «מה כבר נשלח», כך
     שאין צורך בקובץ מצב ובקומיטים מתוך Actions. ‏המפתח רוכב על שדה ה-icon."""
-    url = f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all"
+    # ‏scheduled=1: לכלול גם הודעות שמחכות לצאת השבת (delay), אחרת הן יישלחו שוב.
+    url = f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all&scheduled=1"
     req = urllib.request.Request(url, headers={"User-Agent": "deni-tracker"})
     keys = set()
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -105,6 +106,37 @@ def sent_keys() -> set:
     return keys
 
 
+# ---------------------------------------------------------------- שבת
+
+# ‏איתמר שומר שבת: הודעה שנוצרת בשבת או ביום טוב לא נשלחת מיד, אלא ממתינה ב-ntfy (delay)
+# ‏עד אחרי צאת השבת. ‏הזמנים מ-Hebcal (ירושלים, בלי מפתח). ‏מרווחי ביטחון: שעה לפני הדלקת
+# ‏נרות, ו-10 דקות אחרי ההבדלה.
+HEBCAL = "https://www.hebcal.com/shabbat?cfg=json&geonameid=281184&M=on"
+HOLD_BEFORE = dt.timedelta(minutes=60)
+HOLD_AFTER = dt.timedelta(minutes=10)
+
+
+def hold_until(now: dt.datetime) -> Optional[dt.datetime]:
+    """‏אם עכשיו שבת/יום טוב (כולל המרווחים) - מתי לשחרר. ‏אחרת None."""
+    try:
+        items = get_json(HEBCAL)["items"]
+        candles = [parse_time(i["date"]) for i in items if i["category"] == "candles"]
+        havdalah = [parse_time(i["date"]) for i in items if i["category"] == "havdalah"]
+    except Exception:
+        # ‏אם Hebcal לא זמין: כלל גס ושמרני לפי שעון ישראל - שישי מ-14:00 עד מוצ״ש 20:30.
+        from zoneinfo import ZoneInfo
+        il = now.astimezone(ZoneInfo("Asia/Jerusalem"))
+        if (il.weekday() == 4 and il.hour >= 14) or (il.weekday() == 5 and (il.hour, il.minute) < (20, 30)):
+            sat = il + dt.timedelta(days=1 if il.weekday() == 4 else 0)
+            return sat.replace(hour=20, minute=30, second=0, microsecond=0)
+        return None
+    for c in candles:
+        after = [h for h in havdalah if h > c]
+        if after and c - HOLD_BEFORE <= now < after[0] + HOLD_AFTER:
+            return after[0] + HOLD_AFTER
+    return None
+
+
 def send(message: str, key: str, priority: int = 3) -> None:
     body = {
         "topic": TOPIC,
@@ -113,6 +145,10 @@ def send(message: str, key: str, priority: int = 3) -> None:
         "icon": f"{ICON}?k={key}",
         "priority": priority,
     }
+    held = hold_until(now_utc())
+    if held:
+        body["delay"] = str(int(held.timestamp()))
+        print("ממתין לצאת השבת")
     if os.environ.get("DENI_DRY"):
         print("DRY:", key, message)
         return

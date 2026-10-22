@@ -1,26 +1,46 @@
-# ‏בדיקה בלי ספוילרים. ‏רצה כל 10 דקות (בדקות 4, 14, 24...: רשימה מפורשת ולא 4-59/10, שאחריו לא הופיעה אף ריצה; ריצות בראש השעה מתעכבות
-# ‏יותר ב-GitHub), ו-tracker.py מחליט לבד אם יש משחק קרוב. ‏מחוץ לחלונות - יוצאת מיד.
+# ‏בדיקה בלי ספוילרים. ‏שלושה טריגרים:
+#  · schedule - כל 10 דקות (בדקות 4, 14, 24...; רשימה מפורשת ולא 4-59/10). ‏tracker.py מחליט
+#    לבד אם יש משחק קרוב, ומחוץ לחלונות יוצא מיד.
+#  · workflow_dispatch (Run workflow) - מצב «שמירה»: נשאר חי לאורך כל חלון המשחק הקרוב ובודק
+#    כל 10 דקות, ואחרי 5.5 שעות מפעיל את עצמו מחדש. ‏פתרון זמני כל עוד schedule לא רץ.
+#  · push על הקובץ הזה - בדיקה אחת.
 #
-# 🔴 ‏הריפו חייב להיות ציבורי: ב-GitHub Free תזמון (schedule) לא רץ בריפו פרטי בכלל.
-# ‏הוכח ב-22.10.26: 9 שעות, אפס ריצות מתוזמנות, גם ב-workflow מינימלי של כל 5 דקות.
-# ‏הסימן: בדף ה-workflow מופיע רק «has a workflow_dispatch event trigger».
-# ‏אחרי מעבר לציבורי צריך לדחוף שינוי לקובץ הזה, אחרת התזמון לא נרשם מחדש.
+# 🔴 ‏מאז 21.10.26 GitHub לא מפעיל את ה-schedule בריפו הזה (בעיה מוכרת בריפואים חדשים, ראו
+# ‏CLAUDE.md). ‏שינוי שם הקובץ ל-check.yml (מ-deni.yml) נעשה כדי שיירשם מחדש.
 name: deni
 
 on:
   workflow_dispatch:
-  # ‏ריצה גם כשהקובץ הזה נדחף: לפי דיווחים, בריפו חדש התזמון «מתעורר» רק אחרי ריצה מ-push.
   push:
     branches: [main]
     paths: ['.github/workflows/check.yml']
   schedule:
     - cron: '4,14,24,34,44,54 * * * *'
 
+permissions:
+  contents: read
+  actions: write   # ‏כדי שמצב «שמירה» יוכל להפעיל את עצמו מחדש
+
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - run: pip install --quiet pypdf
-      - run: python3 tracker.py check
+      - if: github.event_name == 'schedule'
+        run: python3 tracker.py check
+      # 🧪 ‏זמני: בדחיפה - בדיקת שרשור. ‏מגיע מיד לגבול ומפעיל ריצה חדשה (שתצא מיד, אין משחק קרוב).
+      - if: github.event_name == 'push'
+        id: chaintest
+        env:
+          DENI_WATCH_MAX_MIN: '0'
+          DENI_WATCH_LOOKAHEAD_H: '48'
+        run: python3 -u tracker.py watch
+      - if: github.event_name == 'workflow_dispatch'
+        id: watch
+        run: python3 -u tracker.py watch
+      - if: steps.watch.outputs.continue == 'true' || steps.chaintest.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run check.yml --ref main

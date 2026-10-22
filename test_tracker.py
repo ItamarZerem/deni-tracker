@@ -227,6 +227,71 @@ class Routing(unittest.TestCase):
         self.assertEqual(self.route("2026-10-23T02:00Z"), [])
 
 
+class Watch(unittest.TestCase):
+    """‏מצב «שמירה» (Run workflow): שעון מדומה שמתקדם עם כל sleep."""
+    def run_watch(self, start, keys_after=None, games=None):
+        clock = [start]
+        checks, out = [], {}
+        def sleep(sec): clock[0] += dt.timedelta(seconds=sec)
+        def keys():
+            return {"G1-post"} if keys_after and clock[0] >= keys_after else set()
+        import tempfile, os
+        f = tempfile.NamedTemporaryFile("w+", delete=False)
+        with mock.patch.object(tracker, "now_utc", lambda: clock[0]), \
+             mock.patch("time.sleep", sleep), \
+             mock.patch.object(tracker, "current_team_id", return_value="22"), \
+             mock.patch.object(tracker, "team_games", return_value=games or [GAME]), \
+             mock.patch.object(tracker, "sent_keys", side_effect=keys), \
+             mock.patch.object(tracker, "check", side_effect=lambda: checks.append(clock[0])), \
+             mock.patch.dict("os.environ", {"GITHUB_OUTPUT": f.name}):
+            tracker.watch()
+        cont = open(f.name).read()
+        os.unlink(f.name)
+        return checks, cont, clock[0]
+
+    def test_no_game_soon(self):
+        checks, cont, _ = self.run_watch(TIP - dt.timedelta(hours=31))
+        self.assertEqual((checks, cont), ([], ""))
+
+    def test_continues_after_5h30_then_resumes_to_the_end(self):
+        """‏לחיצה ב-23:00 (5 שעות לפני הפתיחה): ריצה ראשונה ממשיכה, השנייה מסיימת בסוף החלון."""
+        start = TIP - dt.timedelta(hours=5)
+        checks, cont, t = self.run_watch(start)
+        self.assertEqual(cont, "continue=true\n")
+        self.assertLessEqual((t - start).total_seconds() / 60, 340)
+        checks2, cont2, t2 = self.run_watch(t)
+        self.assertEqual(cont2, "")
+        self.assertGreaterEqual(t2, TIP + dt.timedelta(minutes=tracker.POST_WINDOW[1]))
+        # ‏בין שתי הריצות יש בדיקה לפחות כל 10 דקות לאורך כל חלונות המשחק
+        allc = checks + checks2
+        for a, b in zip(allc, allc[1:]):
+            self.assertLessEqual((b - a).total_seconds(), 600)
+        self.assertLessEqual(allc[0], TIP + dt.timedelta(minutes=tracker.PRE_WINDOW[0]))
+        self.assertGreaterEqual(allc[-1], TIP + dt.timedelta(minutes=tracker.POST_WINDOW[1] - 10))
+
+    def test_stops_once_morning_message_sent(self):
+        start = TIP - dt.timedelta(hours=1)
+        checks, cont, t = self.run_watch(start, keys_after=TIP + dt.timedelta(minutes=200))
+        self.assertEqual(cont, "")
+        self.assertLess(t, TIP + dt.timedelta(minutes=215))
+
+    def test_network_error_does_not_stop(self):
+        clock = [TIP - dt.timedelta(hours=1)]
+        n = [0]
+        def boom():
+            n[0] += 1
+            raise OSError("x")
+        with mock.patch.object(tracker, "now_utc", lambda: clock[0]), \
+             mock.patch("time.sleep", lambda s: clock.__setitem__(0, clock[0] + dt.timedelta(seconds=s))), \
+             mock.patch.object(tracker, "current_team_id", return_value="22"), \
+             mock.patch.object(tracker, "team_games", return_value=[GAME]), \
+             mock.patch.object(tracker, "sent_keys", return_value=set()), \
+             mock.patch.object(tracker, "check", side_effect=boom), \
+             mock.patch.dict("os.environ", {"GITHUB_OUTPUT": "/dev/null"}):
+            tracker.watch()
+        self.assertGreater(n[0], 20)
+
+
 class Misc(unittest.TestCase):
     def test_parse_time(self):
         self.assertEqual(tracker.parse_time("2026-10-22T02:00Z"), TIP)

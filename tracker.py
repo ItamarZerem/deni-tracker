@@ -302,5 +302,49 @@ def check() -> None:
         print("בדיקה הסתיימה")
 
 
+# ‏מצב «שמירה» (watch): פתרון זמני כל עוד התזמון של GitHub לא רץ בריפו (ראו CLAUDE.md).
+# ‏איתמר לוחץ Run workflow פעם אחת לפני השינה; הריצה נשארת חיה לאורך כל חלון המשחק הקרוב
+# ‏ובודקת כל 10 דקות. ‏ריצה ב-GitHub מוגבלת ל-6 שעות, ולכן אחרי WATCH_MAX_MIN דקות היא
+# ‏כותבת continue=true ל-GITHUB_OUTPUT, וה-workflow מפעיל את עצמו מחדש.
+# ‏ה-env מאפשר לבדוק את השרשור ב-GitHub בלי לחכות 5.5 שעות.
+WATCH_LOOKAHEAD_H = int(os.environ.get("DENI_WATCH_LOOKAHEAD_H", 30))  # ‏משחק בתוך 30 שעות
+WATCH_MAX_MIN = int(os.environ.get("DENI_WATCH_MAX_MIN", 330))         # ‏5.5 שעות, מתחת ל-6
+WATCH_STEP_MIN = 10
+
+
+def watch() -> None:
+    import time
+    started = now_utc()
+    games = team_games(current_team_id())
+    upcoming = [g for g in games
+                if g["tip"] + dt.timedelta(minutes=POST_WINDOW[1]) > started
+                and g["tip"] < started + dt.timedelta(hours=WATCH_LOOKAHEAD_H)]
+    if not upcoming:
+        print("אין משחק ב-30 השעות הקרובות")
+        return
+    game = upcoming[0]
+    end = game["tip"] + dt.timedelta(minutes=POST_WINDOW[1])
+    print(f"שומר עד {end:%Y-%m-%d %H:%M} UTC")
+    while True:
+        now = now_utc()
+        if now > end or f"{game['id']}-post" in sent_keys():
+            print("החלון הסתיים")
+            return
+        if (now - started).total_seconds() / 60 >= WATCH_MAX_MIN:
+            if end - now <= dt.timedelta(minutes=WATCH_STEP_MIN):
+                print("החלון הסתיים")
+                return
+            print("ממשיך בריצה חדשה")
+            out = os.environ.get("GITHUB_OUTPUT")
+            if out:
+                open(out, "a").write("continue=true\n")
+            return
+        try:
+            check()
+        except Exception as e:  # ‏תקלת רשת רגעית לא עוצרת את השמירה
+            print("שגיאה, ממשיך:", type(e).__name__)
+        time.sleep(WATCH_STEP_MIN * 60)
+
+
 if __name__ == "__main__":
-    {"check": check}[sys.argv[1]]()
+    {"check": check, "watch": watch}[sys.argv[1]]()

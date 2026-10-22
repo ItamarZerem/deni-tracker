@@ -3,7 +3,8 @@
 #    לבד אם יש משחק קרוב, ומחוץ לחלונות יוצא מיד.
 #  · workflow_dispatch (Run workflow) - מצב «שמירה»: נשאר חי לאורך כל חלון המשחק הקרוב ובודק
 #    כל 10 דקות, ואחרי 5.5 שעות מפעיל את עצמו מחדש. ‏פתרון זמני כל עוד schedule לא רץ.
-#  · push על הקובץ הזה - בדיקה אחת.
+#  · push על הקובץ הזה - רק כדי «להעיר» את הרישום; לא בודק כלום.
+#  · השרשור (Run workflow שמפעיל את עצמו) אומת ב-GitHub ב-22.10.26.
 #
 # 🔴 ‏מאז 21.10.26 GitHub לא מפעיל את ה-schedule בריפו הזה (בעיה מוכרת בריפואים חדשים, ראו
 # ‏CLAUDE.md). ‏שינוי שם הקובץ ל-check.yml (מ-deni.yml) נעשה כדי שיירשם מחדש.
@@ -30,17 +31,10 @@ jobs:
       - run: pip install --quiet pypdf
       - if: github.event_name == 'schedule'
         run: python3 tracker.py check
-      # 🧪 ‏זמני: בדחיפה - בדיקת שרשור. ‏מגיע מיד לגבול ומפעיל ריצה חדשה (שתצא מיד, אין משחק קרוב).
-      - if: github.event_name == 'push'
-        id: chaintest
-        env:
-          DENI_WATCH_MAX_MIN: '0'
-          DENI_WATCH_LOOKAHEAD_H: '48'
-        run: python3 -u tracker.py watch
       - if: github.event_name == 'workflow_dispatch'
         id: watch
         run: python3 -u tracker.py watch
-      - if: steps.watch.outputs.continue == 'true' || steps.chaintest.outputs.continue == 'true'
+      - if: steps.watch.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run check.yml --ref main

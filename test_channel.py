@@ -190,6 +190,12 @@ class Flow(unittest.TestCase):
         self.at(-20 * 60 + 10)
         self.assertEqual(len(self.channel_msgs()), 1)
 
+    def test_skip_button(self):
+        self.at(-20 * 60 + 5)
+        self.state["games"]["1"]["skip"] = True
+        self.at(-17 * 60 + 5)
+        self.assertEqual(self.channel_msgs(), [])
+
     def test_manual_tv_wins(self):
         self.state["games"]["1"] = {"tv": "5MAX"}
         self.at(-17 * 60 + 5)

@@ -123,7 +123,7 @@ uv run -q --with pypdf --with pillow --with python-bidi python3 -m unittest test
 מריצים על העונה שעברה. ⛔ בלי `DENI_SHOW` על משחקים מהעונה הנוכחית.
 
 ## יומן
-- 26.10.26: נבנה בוט לערוץ הטלגרם (`channel.py`, `card.py`, 31 בדיקות ב-`test_channel.py`), ונוסף
+- 26.10.26: נבנה בוט לערוץ הטלגרם (`channel.py`, `card.py`, 32 בדיקות ב-`test_channel.py`), ונוסף
   טריגר חיצוני כל 5 דקות. התזמון של GitHub עדיין: ריצה כל 2 עד 5 שעות. ההגדרה בצד של איתמר
   (בוט ב-BotFather, Secret, PAT, cron-job.org) - ראו את הסטטוס בסעיף ⏭️.
 - 21.10.26: הוקם. הריפו `git@github.com:ItamarZerem/deni-tracker.git` (פרטי) נוצר בידי איתמר

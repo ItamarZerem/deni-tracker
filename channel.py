@@ -391,7 +391,8 @@ def is_admin(user: dict) -> bool:
 def keyboard(gid: str) -> dict:
     b = lambda code: {"text": TV_CODES[code] or "בלי ערוץ", "callback_data": f"{gid}|tv|{code}"}
     return {"inline_keyboard": [
-        [{"text": "✅ לפרסם עכשיו", "callback_data": f"{gid}|go"}],
+        [{"text": "✅ לפרסם עכשיו", "callback_data": f"{gid}|go"},
+         {"text": "🚫 לא לפרסם", "callback_data": f"{gid}|skip"}],
         [b("s5"), b("s5p"), b("live")],
         [b("stars"), b("gold"), b("max")],
         [b("none")],
@@ -445,7 +446,8 @@ def card_for(game: dict, status: tuple) -> bytes:
 def draft_caption(game: dict, gs: dict) -> str:
     text = preview_text(game, gs.get("tv", gs.get("tv_auto")), tuple(gs["draft_status"]), gs.get("headline", ""))
     at = clock(preview_at(game["tip"]))
-    return (f"📝 טיוטה · תתפרסם בערוץ ב-{at}\n\n{text}\n\n"
+    head = "🚫 לא תתפרסם · ✅ מפרסם בכל זאת" if gs.get("skip") else f"📝 טיוטה · תתפרסם בערוץ ב-{at}"
+    return (f"{head}\n\n{text}\n\n"
             "· כפתור: שינוי ערוץ השידור\n· הודעה כתובה: שורת פתיחה מיוחדת (‎/reset לביטול)")
 
 
@@ -517,7 +519,8 @@ def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime) -> N
         send_draft(game, gs)
         save_state(state)
 
-    if not gs.get("preview") and (now >= pv or gs.get("go")) and now < tip - dt.timedelta(minutes=10):
+    if not gs.get("preview") and not gs.get("skip") and (now >= pv or gs.get("go")) \
+            and now < tip - dt.timedelta(minutes=10):
         publish_preview(game, gs)
         save_state(state)
 
@@ -580,7 +583,10 @@ def handle_updates(state: dict, games: list) -> None:
             if not gs or gs.get("preview"):
                 continue
             if action == "go":
-                gs["go"] = True
+                gs["go"], gs["skip"] = True, False
+            elif action == "skip":
+                gs["skip"], gs["go"] = True, False
+                touched.add(gid)
             elif action == "tv" and rest[0] in TV_CODES:
                 gs["tv"] = TV_CODES[rest[0]]
                 touched.add(gid)

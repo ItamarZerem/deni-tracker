@@ -10,7 +10,9 @@
 2. כל עוד הוא לא סדיר, איתמר לוחץ Run workflow לפני כל משחק, ובפרט לפני כל שבת.
 3. ⛔ לא לחשוף שום תוצאה, גם לא בפלט של פקודות בטרמינל (איתמר רואה אותו).
 4. בוט הערוץ (26.10.26): הקוד מוכן. הערוץ: @DeniAvdijaUpdates. הבוט הוא הבוט הישן של איתמר (היה ב-Make, הטוקן
-   הוחלף ב-26.10). ממתינים: Secret `TELEGRAM_TOKEN`, המזהה של איתמר ב-`telegram_admin`, PAT + cron-job.org.
+   הוחלף ב-26.10; ה-webhook של Make נמחק אוטומטית, ולכן ה-`/start` הראשון הלך לאיבוד). הכול
+   מוגדר מאז 26.10 בלילה: Secret, `telegram_admin`, PAT בלי תפוגה, cron-job.org כל 5 דקות (Test run: 204).
+   ההודעה הראשונה בערוץ: 27.10 ב-12:00 (הלייקרס), עם טיוטה לאיתמר ב-9:00. לבדוק שהיא יצאה.
 
 ## המטרה
 איתמר צופה במשחקים של דני בבוקר, בהקלטה, בלי לדעת שום דבר מראש. המערכת אומרת לו רק אם
@@ -58,7 +60,7 @@
 `POST https://api.github.com/repos/ItamarZerem/deni-tracker/actions/workflows/check.yml/dispatches`
 עם `{"ref":"main"}`, `Authorization: Bearer <PAT>`, `Accept: application/vnd.github+json`.
 ה-PAT הוא fine-grained, רק לריפו הזה, עם הרשאת Actions: Read and write בלבד. ⚠️ יש לו תאריך תפוגה,
-וצריך לחדש אותו לפניו. התשובה התקינה היא 204.
+וצריך לחדש אותו לפניו (הטוקן שנוצר ב-26.10 הוא בלי תפוגה). התשובה התקינה היא 204.
 
 ## איך זה בנוי
 - `tracker.py check` רץ ב-GitHub Actions (`.github/workflows/check.yml`; עד 22.10 נקרא deni.yml - שונה כי נרשם כשהריפו היה פרטי, ראו למטה) **כל 10 דקות, כל היום**

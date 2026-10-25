@@ -2,3 +2,4 @@ refresh.log
 __pycache__/
 check.log
 .venv/
+tgstate/

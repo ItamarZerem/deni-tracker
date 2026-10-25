@@ -1,17 +1,25 @@
-# ‏בדיקה בלי ספוילרים. ‏שלושה טריגרים:
-#  · schedule - כל 10 דקות (בדקות 4, 14, 24...; רשימה מפורשת ולא 4-59/10). ‏tracker.py מחליט
-#    לבד אם יש משחק קרוב, ומחוץ לחלונות יוצא מיד.
-#  · workflow_dispatch (Run workflow) - מצב «שמירה»: נשאר חי לאורך כל חלון המשחק הקרוב ובודק
-#    כל 10 דקות, ואחרי 5.5 שעות מפעיל את עצמו מחדש. ‏פתרון זמני כל עוד schedule לא רץ.
-#  · push על הקובץ הזה - רק כדי «להעיר» את הרישום; לא בודק כלום.
-#  · השרשור (Run workflow שמפעיל את עצמו) אומת ב-GitHub ב-22.10.26.
+# ‏שתי עבודות בכל ריצה:
+#  · check - ההתראות הפרטיות לאיתמר, בלי ספוילרים (tracker.py).
+#  · channel - הבוט של ערוץ הטלגרם «עדכונים דני אבדיה» (channel.py), עם תוצאות וסטטיסטיקה.
 #
-# 🔴 ‏מאז 21.10.26 GitHub לא מפעיל את ה-schedule בריפו הזה (בעיה מוכרת בריפואים חדשים, ראו
-# ‏CLAUDE.md). ‏שינוי שם הקובץ ל-check.yml (מ-deni.yml) נעשה כדי שיירשם מחדש.
+# ‏טריגרים:
+#  · workflow_dispatch בלי פרמטרים (mode=check) - הטריגר הראשי: cron-job.org קורא ל-API של
+#    GitHub כל 5 דקות (ראו CLAUDE.md). ‏שני הסקריפטים מחליטים לבד אם יש משחק קרוב, ומחוץ
+#    לחלונות יוצאים מיד.
+#  · workflow_dispatch עם mode=watch - מצב «שמירה» הישן: נשאר חי לאורך כל חלון המשחק הקרוב.
+#    ‏מיותר כל עוד cron-job.org פועל.
+#  · schedule - גיבוי. ‏🔴 ‏GitHub מפעיל אותו רק פעם ב-2 עד 5 שעות בריפו הזה (ראו CLAUDE.md).
+#  · push על הקובץ הזה - רק כדי «להעיר» את הרישום של schedule; לא בודק כלום.
 name: deni
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check = בדיקה אחת · watch = מצב שמירה לאורך כל המשחק'
+        type: choice
+        options: [check, watch]
+        default: check
   push:
     branches: [main]
     paths: ['.github/workflows/check.yml']
@@ -29,12 +37,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: pip install --quiet pypdf
-      - if: github.event_name == 'schedule'
+      - if: github.event_name == 'schedule' || inputs.mode == 'check'
         run: python3 tracker.py check
-      - if: github.event_name == 'workflow_dispatch'
+      - if: inputs.mode == 'watch'
         id: watch
         run: python3 -u tracker.py watch
       - if: steps.watch.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run check.yml --ref main
+        run: gh workflow run check.yml --ref main -f mode=watch
+
+  channel:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # ‏ריצה אחת בכל פעם, כדי ששתי ריצות לא יפרסמו את אותה הודעה
+    concurrency:
+      group: channel
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet pypdf pillow python-bidi
+      # ‏המצב (מה כבר פורסם, מה איתמר בחר) נשמר ב-cache ולא בריפו: אין קומיטים, והוא לא
+      # ‏גלוי לציבור. ‏כל שמירה במפתח חדש, והשחזור לוקח את האחרונה.
+      - uses: actions/cache/restore@v4
+        with:
+          path: tgstate
+          key: tgstate-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: tgstate-
+      - id: ch
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: python3 channel.py
+      - if: always() && steps.ch.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: tgstate
+          key: tgstate-${{ github.run_id }}-${{ github.run_attempt }}

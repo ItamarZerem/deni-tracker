@@ -2,7 +2,7 @@
 
 ‏1280x720: הקבוצה של דני מימין (עברית נקראת מימין לשמאל), היריבה משמאל, כל צד בצבע
 של הקבוצה, ודני במרכז. ‏למעלה שם הערוץ, ובאמצע מתי המשחק.
-‏Pillow ‏בלי raqm לא יודע לכתוב מימין לשמאל, לכן כל טקסט עברי עובר דרך python-bidi.
+‏כל טקסט עברי עובר דרך python-bidi, והגופן נטען תמיד במנוע BASIC (ראו font).
 """
 import io
 import os
@@ -19,7 +19,9 @@ BASE = (11, 13, 18)
 
 
 def font(size: int, weight: int = 700) -> ImageFont.FreeTypeFont:
-    f = ImageFont.truetype(FONT, size)
+    # ‏BASIC תמיד: ב-GitHub ל-Pillow יש raqm, שהופך עברית בעצמו, ואז get_display הפך אותה
+    # ‏בחזרה והתמונה יצאה «םירזוח». ‏עם BASIC ההיפוך נעשה רק פעם אחת, ב-get_display.
+    f = ImageFont.truetype(FONT, size, layout_engine=ImageFont.Layout.BASIC)
     f.set_variation_by_axes([weight])
     return f
 

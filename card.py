@@ -71,62 +71,102 @@ def background(right: tuple, left: tuple) -> Image.Image:
     return img
 
 
+def paste_logo(img: Image.Image, url: str, cx: int, cy: int, size: int) -> None:
+    """‏לוגו ממורכז ב-(cx, cy), עם צל רך כדי שיבלוט על כל צבע."""
+    logo = fetch_image(url)
+    logo.thumbnail((size, size), Image.LANCZOS)
+    x, y = cx - logo.width // 2, cy - logo.height // 2
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    shadow.paste((0, 0, 0, 255), (x + 6, y + 10), logo.split()[3].point(lambda a: int(a * 0.55)))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)))
+    img.alpha_composite(logo, (x, y))
+
+
+def paste_player(img: Image.Image, url: str, max_w: int, max_h: int) -> None:
+    """‏דני במרכז, מהחזה ומעלה, נשען על התחתית."""
+    p = fetch_image(url)
+    p.thumbnail((max_w, max_h), Image.LANCZOS)
+    img.alpha_composite(p, ((W - p.width) // 2, H - p.height))
+
+
+def bottom_fade(img: Image.Image, height: int = 200) -> None:
+    """‏פס כהה בתחתית, כדי שהטקסט עליו ייקרא."""
+    fade = Image.new("RGBA", (W, height), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(fade)
+    for y in range(height):
+        fd.line([(0, y), (W, y)], fill=(*BASE, int(235 * (y / height) ** 1.6)))
+    img.alpha_composite(fade, (0, H - height))
+
+
+def pill(draw, text: str, cx: int, cy: int, size: int, fill: tuple, color: tuple = BASE) -> None:
+    f = font(size, 800)
+    t = get_display(text)
+    x0, y0, x1, y1 = draw.textbbox((0, 0), t, font=f)
+    w, h = x1 - x0 + 44, y1 - y0 + 22
+    draw.rounded_rectangle([cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2], radius=h // 2, fill=fill)
+    draw.text((cx, cy), t, font=f, fill=color, anchor="mm")
+
+
+def header(draw) -> None:
+    text_center(draw, (W // 2, 46), CHANNEL, font(30, 600), fill=(255, 255, 255, 215))
+    draw.line([(W // 2 - 150, 74), (W // 2 + 150, 74)], fill=(255, 255, 255, 90), width=2)
+
+
+def jpeg(img: Image.Image) -> bytes:
+    out = io.BytesIO()
+    img.convert("RGB").save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
 def preview_card(us: dict, them: dict, when: str, date: str, label: str = "",
                  chip: str = "", player_png: str = "") -> bytes:
     """‏us / them: {"name": "פורטלנד", "logo": url, "color": hex, "alt": hex}.
     ‏when: «הלילה 5:00». ‏date: «יום שלישי 28.10». ‏label: «עונה סדירה» / «פלייאוף».
     ‏chip: תגית צהובה ליד דני, למשל «בספק למשחק»."""
-    right = team_color(us["color"], us.get("alt", ""))
-    left = team_color(them["color"], them.get("alt", ""))
-    img = background(right, left).convert("RGBA")
+    img = background(team_color(us["color"], us.get("alt", "")),
+                     team_color(them["color"], them.get("alt", ""))).convert("RGBA")
     draw = ImageDraw.Draw(img)
-
-    # ‏לוגואים, עם צל רך כדי שיבלטו על כל צבע
     for team, cx in ((us, W - 245), (them, 245)):
-        logo = fetch_image(team["logo"])
-        logo.thumbnail((300, 300), Image.LANCZOS)
-        shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        mask = logo.split()[3].point(lambda a: int(a * 0.55))
-        shadow.paste((0, 0, 0, 255), (cx - logo.width // 2 + 6, 300 - logo.height // 2 + 10), mask)
-        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)))
-        img.alpha_composite(logo, (cx - logo.width // 2, 300 - logo.height // 2))
+        paste_logo(img, team["logo"], cx, 300, 300)
         text_center(draw, (cx, 500), team["name"], font(52, 800))
-
-    # ‏דני במרכז, מהחזה ומעלה, נשען על התחתית
     if player_png:
-        p = fetch_image(player_png)
-        p.thumbnail((620, 460), Image.LANCZOS)
-        img.alpha_composite(p, ((W - p.width) // 2, H - p.height))
-
-    # ‏פס כהה בתחתית, כדי שהטקסט עליו ייקרא
-    fade = Image.new("RGBA", (W, 200), (0, 0, 0, 0))
-    fd = ImageDraw.Draw(fade)
-    for y in range(200):
-        fd.line([(0, y), (W, y)], fill=(*BASE, int(235 * (y / 200) ** 1.6)))
-    img.alpha_composite(fade, (0, H - 200))
+        paste_player(img, player_png, 620, 460)
+    bottom_fade(img)
     draw = ImageDraw.Draw(img)
-
-    # ‏למעלה: שם הערוץ, ומתחתיו מתי
-    text_center(draw, (W // 2, 46), CHANNEL, font(30, 600), fill=(255, 255, 255, 215))
-    draw.line([(W // 2 - 150, 74), (W // 2 + 150, 74)], fill=(255, 255, 255, 90), width=2)
+    header(draw)
     text_center(draw, (W // 2, 128), when, font(64, 900))
     text_center(draw, (W // 2, 188), date, font(34, 500), fill=(255, 255, 255, 220))
-
     if label:
         text_center(draw, (W // 2, H - 40), label, font(30, 600), fill=(255, 255, 255, 200))
     if chip:
-        f = font(32, 800)
-        t = get_display(chip)
-        x0, y0, x1, y1 = draw.textbbox((0, 0), t, font=f)
-        w, h = x1 - x0 + 44, y1 - y0 + 22
-        cx, cy = W // 2, H - 96
-        draw.rounded_rectangle([cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2],
-                               radius=h // 2, fill=(250, 196, 40))
-        draw.text((cx, cy), t, font=f, fill=BASE, anchor="mm")
+        pill(draw, chip, W // 2, H - 96, 32, (250, 196, 40))
+    return jpeg(img)
 
-    out = io.BytesIO()
-    img.convert("RGB").save(out, "JPEG", quality=90)
-    return out.getvalue()
+
+def score_card(us: dict, them: dict, ours: int, theirs: int, title: str, chip: str,
+               player_png: str = "") -> bytes:
+    """‏תמונת הסיום: התוצאה בגדול, כל מספר ליד הלוגו של הקבוצה שלו (שלנו מימין),
+    והמנצחת בלבן מלא. ‏title: «סיום» / «סיום אחרי הארכה». ‏chip: השורה של דני."""
+    img = background(team_color(us["color"], us.get("alt", "")),
+                     team_color(them["color"], them.get("alt", ""))).convert("RGBA")
+    draw = ImageDraw.Draw(img)
+    for team, cx in ((us, W - 190), (them, 190)):
+        paste_logo(img, team["logo"], cx, 290, 250)
+        text_center(draw, (cx, 455), team["name"], font(44, 800))
+    if player_png:
+        paste_player(img, player_png, 520, 380)
+    bottom_fade(img, 170)
+    draw = ImageDraw.Draw(img)
+    header(draw)
+    text_center(draw, (W // 2, 118), title, font(46, 800), fill=(255, 255, 255, 230))
+    win, lose = (255, 255, 255, 255), (255, 255, 255, 140)
+    big = font(150, 900)
+    draw.text((W // 2 + 175, 250), str(ours), font=big, anchor="mm", fill=win if ours > theirs else lose)
+    draw.text((W // 2 - 175, 250), str(theirs), font=big, anchor="mm", fill=win if theirs > ours else lose)
+    draw.text((W // 2, 250), "-", font=font(110, 700), anchor="mm", fill=(255, 255, 255, 170))
+    if chip:
+        pill(draw, chip, W // 2, H - 70, 34, (255, 255, 255))
+    return jpeg(img)
 
 
 def announce_card(team: dict, title: str, lines: list, player_png: str) -> bytes:
@@ -153,6 +193,4 @@ def announce_card(team: dict, title: str, lines: list, player_png: str) -> bytes
         draw.text((right, y), get_display(line), font=font(40, 500), fill=(255, 255, 255, 225), anchor="rm")
         y += 58
 
-    out = io.BytesIO()
-    img.convert("RGB").save(out, "JPEG", quality=90)
-    return out.getvalue()
+    return jpeg(img)

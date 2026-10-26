@@ -538,21 +538,127 @@ def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime) -> N
         status_phase(game, gs, now, data)
         save_state(state)
 
-    if data is None or gs.get("final"):
+    if data is None:
         return
     st = tracker.game_status(data)
-    if not gs.get("half") and HALF_WINDOW[0] <= now - tip <= HALF_WINDOW[1] \
-            and st.get("name") == "STATUS_HALFTIME":
-        row = deni_box(data)
-        if minutes(row):  # ‏רק אם דני שיחק
-            post(half_text(game, *scores(data, game)[:2], row))
-        gs["half"] = True
+    if not gs.get("final"):
+        if not gs.get("half") and HALF_WINDOW[0] <= now - tip <= HALF_WINDOW[1] \
+                and st.get("name") == "STATUS_HALFTIME":
+            row = deni_box(data)
+            if minutes(row):  # ‏רק אם דני שיחק
+                post(half_text(game, *scores(data, game)[:2], row))
+            gs["half"] = True
+            save_state(state)
+        if st.get("completed"):
+            publish_final(game, data, nxt)
+            gs["final"], gs["final_at"] = True, now.isoformat()
+            save_state(state)
+    if gs.get("final_at"):
+        highlights_phase(game, gs, now, data)
         save_state(state)
-    if st.get("completed"):
-        ours, theirs, ot = scores(data, game)
-        post(final_text(game, ours, theirs, ot, deni_box(data), nxt))
-        gs["final"] = True
-        save_state(state)
+
+
+def final_card(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict]) -> bytes:
+    import card
+    us, them = game["us"], game["them"]
+    title = "סיום" if not ot else "סיום אחרי הארכה" if ot == 1 else f"סיום אחרי {ot} הארכות"
+    if minutes(row):
+        chip = (f"דני: {count(row.get('PTS', 0), 'נקודה', 'נקודות')} · "
+                f"{count(row.get('REB', 0), 'ריבאונד', 'ריבאונדים')} · "
+                f"{count(row.get('AST', 0), 'אסיסט', 'אסיסטים')}")
+    else:
+        chip = "דני לא שיחק"
+    return card.score_card({"name": team_he(us["abbr"]), **team_look(us["id"])},
+                           {"name": team_he(them["abbr"]), **team_look(them["id"])},
+                           ours, theirs, title, chip, tracker.ICON)
+
+
+def publish_final(game: dict, data: dict, nxt: Optional[dict]) -> None:
+    """‏הודעת הסיום, עם תמונת התוצאה. ‏אם התמונה נכשלת - הטקסט יוצא בלעדיה."""
+    ours, theirs, ot = scores(data, game)
+    row = deni_box(data)
+    text = final_text(game, ours, theirs, ot, row, nxt)
+    try:
+        photo = final_card(game, ours, theirs, ot, row)
+    except Exception as e:
+        print("תמונה נכשלה:", type(e).__name__)
+        post(text)
+        return
+    tg("sendPhoto", {"chat_id": CHANNEL, "caption": text}, photo)
+    print("נשלח")
+
+
+# ---------------------------------------------------------------- היילייטס
+# ‏רק קישורים למקורות רשמיים (יוטיוב של הקבוצה ושל ה-NBA, ו-ESPN). ‏לא מעלים סרטונים מחדש:
+# ‏הזכויות של ה-NBA. ‏בטלגרם קישור ליוטיוב מוצג עם תמונה וכפתור הפעלה.
+
+TEAM_YOUTUBE = {"POR": "UCXk66yyzXo7-2M1BMqLhltQ"}   # ‏קבוצה חדשה אחרי טרייד: להוסיף כאן
+NBA_YOUTUBE = "UCWJ2lWNubArHWmf3FIHbfcQ"
+HL_WAIT = dt.timedelta(minutes=60)    # ‏כמה מחכים לסרטון של דני לפני שמסתפקים בתקציר המשחק
+HL_UNTIL = dt.timedelta(hours=4)      # ‏אחרי זה מפסיקים לחפש
+
+
+def youtube(channel_id: str) -> list:
+    """‏[(כותרת, קישור, זמן פרסום)] מה-RSS של ערוץ יוטיוב (15 האחרונים, בלי מפתח)."""
+    req = urllib.request.Request(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+                                 headers={"User-Agent": "Mozilla/5.0"})
+    page = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    out = []
+    for e in re.findall(r"<entry>(.*?)</entry>", page, re.S):
+        title = re.search(r"<title>(.*?)</title>", e, re.S)
+        link = re.search(r'<link rel="alternate" href="([^"]+)"', e)
+        pub = re.search(r"<published>(.*?)</published>", e)
+        if title and link and pub:
+            out.append((html.unescape(title.group(1)), link.group(1), parse_time(pub.group(1))))
+    return out
+
+
+def find_videos(game: dict, data: dict) -> dict:
+    """‏{"deni": קישור או None, "game": קישור או None}. ‏יוטיוב קודם (תצוגה יפה יותר בטלגרם)."""
+    them = next((c["team"] for c in data["header"]["competitions"][0]["competitors"]
+                 if c["team"]["id"] == game["them"]["id"]), {})
+    them_names = [n for n in (them.get("name"), them.get("location")) if n]
+    found = {"deni": None, "game": None}
+    feeds = [TEAM_YOUTUBE.get(game["us"]["abbr"]), NBA_YOUTUBE]
+    for cid in filter(None, feeds):
+        try:
+            videos = youtube(cid)
+        except Exception:
+            continue
+        for title, link, pub in videos:
+            if pub < game["tip"]:
+                continue
+            if not found["deni"] and tracker.LAST_NAME in title and "Highlights" in title:
+                found["deni"] = link
+            if not found["game"] and cid != NBA_YOUTUBE and title.startswith("Game Highlights") \
+                    and any(n in title for n in them_names):
+                found["game"] = link
+    for v in data.get("videos", []):
+        link = ((v.get("links") or {}).get("web") or {}).get("href")
+        headline = v.get("headline", "")
+        if not link:
+            continue
+        if not found["deni"] and tracker.LAST_NAME in headline:
+            found["deni"] = link
+        if not found["game"] and "Game Highlights" in headline:
+            found["game"] = link
+    return found
+
+
+def highlights_phase(game: dict, gs: dict, now: dt.datetime, data: dict) -> None:
+    """‏אחרי הסיום: סרטון של דני אם יש. ‏אם אין תוך שעה - תקציר המשחק. ‏סרטון של דני
+    שמגיע אחרי התקציר עדיין מתפרסם."""
+    since = now - parse_time(gs["final_at"])
+    if gs.get("hl_deni") or since > HL_UNTIL:
+        return
+    played = bool(minutes(deni_box(data)))
+    found = find_videos(game, data)
+    if played and found["deni"]:
+        post(f"🎥 ההיילייטס של דני מהמשחק\n{found['deni']}")
+        gs["hl_deni"] = True
+    elif found["game"] and not gs.get("hl_game") and (since >= HL_WAIT or not played):
+        post(f"🎥 תקציר המשחק\n{found['game']}")
+        gs["hl_game"] = True
 
 
 def handle_updates(state: dict, games: list) -> None:

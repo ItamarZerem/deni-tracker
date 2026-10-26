@@ -140,6 +140,8 @@ class Flow(unittest.TestCase):
             mock.patch.object(channel, "CHANNEL", "@chan"),
             mock.patch.object(channel, "tg", self.fake_tg),
             mock.patch.object(channel, "card_for", lambda g, s: b"jpg"),
+            mock.patch.object(channel, "final_card", lambda *a: b"jpg"),
+            mock.patch.object(channel, "find_videos", lambda g, d: self.videos),
             mock.patch.object(channel, "sport5_channel", lambda g: "ספורט 5"),
             mock.patch.object(tracker, "hold_until", lambda now: None),
         ]
@@ -153,6 +155,7 @@ class Flow(unittest.TestCase):
         mock.patch.object(channel, "get_json", lambda url: self.data).start()
         self.state = {"offset": 0, "games": {}}
         self.g = game()
+        self.videos = {"deni": None, "game": None}
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -248,12 +251,72 @@ class Flow(unittest.TestCase):
         self.assertEqual(len(self.channel_msgs()), 1)
         self.assertTrue(self.channel_msgs()[0].startswith("פורטלנד מפסידה ללייקרס"))
 
+    def final_then(self, played=True):
+        self.state["games"]["1"] = {"preview": "x", "half": True}
+        self.data = summary(state="post", name="STATUS_FINAL", completed=True, periods=4,
+                            deni=PLAYED if played else DNP)
+        self.at(150)   # ‏הסיום
+
+    def test_highlights_deni_first(self):
+        self.final_then()
+        self.videos = {"deni": "https://youtu.be/d", "game": "https://youtu.be/g"}
+        self.at(160)
+        self.at(240)
+        self.assertEqual(self.channel_msgs()[1:], ["🎥 ההיילייטס של דני מהמשחק\nhttps://youtu.be/d"])
+
+    def test_highlights_waits_then_game(self):
+        self.final_then()
+        self.videos = {"deni": None, "game": "https://youtu.be/g"}
+        self.at(160)                              # ‏10 דקות אחרי הסיום: מחכים לסרטון של דני
+        self.assertEqual(len(self.channel_msgs()), 1)
+        self.at(215)                              # ‏שעה וחמש: התקציר
+        self.at(220)
+        self.assertEqual(self.channel_msgs()[1:], ["🎥 תקציר המשחק\nhttps://youtu.be/g"])
+        self.videos = {"deni": "https://youtu.be/d", "game": "https://youtu.be/g"}
+        self.at(230)                              # ‏סרטון של דני שהגיע מאוחר - עדיין יוצא
+        self.assertEqual(self.channel_msgs()[-1], "🎥 ההיילייטס של דני מהמשחק\nhttps://youtu.be/d")
+
+    def test_highlights_no_wait_if_not_played(self):
+        self.final_then(played=False)
+        self.videos = {"deni": "https://youtu.be/d", "game": "https://youtu.be/g"}
+        self.at(155)
+        self.assertEqual(self.channel_msgs()[1:], ["🎥 תקציר המשחק\nhttps://youtu.be/g"])
+
+    def test_highlights_stop_after_4h(self):
+        self.final_then()
+        self.videos = {"deni": "https://youtu.be/d", "game": None}
+        self.at(150 + 4 * 60 + 5)
+        self.assertEqual(len(self.channel_msgs()), 1)
+
     def test_postponed(self):
         self.state["games"]["1"] = {"preview": "x"}
         self.data = summary(state="post", name="STATUS_POSTPONED")
         self.at(30)
         self.at(35)
         self.assertEqual(self.channel_msgs(), ["📅 המשחק של פורטלנד נגד הלייקרס נדחה"])
+
+
+class Videos(unittest.TestCase):
+    def test_find(self):
+        tip = dt.datetime(2026, 10, 24, 2, 0, tzinfo=UTC)
+        g = game(tip=tip.isoformat(), abbr="SAC")
+        data = summary()
+        data["header"]["competitions"][0]["competitors"][1]["team"].update(name="Kings", location="Sacramento")
+        data["videos"] = [{"headline": "Portland vs. Sacramento: Game Highlights", "links": {"web": {"href": "https://espn/g"}}}]
+        late = tip + dt.timedelta(hours=3)
+        feeds = {
+            channel.TEAM_YOUTUBE["POR"]: [
+                ("Micah Nori Postgame Interview | Trail Blazers 110, Kings 100", "https://yt/i", late),
+                ("Game Highlights: Portland Trail Blazers 110, Sacramento Kings 100", "https://yt/g", late),
+                ("Game Highlights: Portland Trail Blazers 99, Phoenix Suns 98", "https://yt/old", tip - dt.timedelta(days=2)),
+            ],
+            channel.NBA_YOUTUBE: [("Deni Avdija Highlights | Blazers vs Kings", "https://yt/d", late),
+                                  ("Deni Avdija Postgame Interview", "https://yt/x", late)],
+        }
+        with mock.patch.object(channel, "youtube", lambda cid: feeds[cid]):
+            self.assertEqual(channel.find_videos(g, data), {"deni": "https://yt/d", "game": "https://yt/g"})
+        with mock.patch.object(channel, "youtube", lambda cid: []):   # ‏אין יוטיוב - ESPN
+            self.assertEqual(channel.find_videos(g, data), {"deni": None, "game": "https://espn/g"})
 
 
 class Updates(unittest.TestCase):

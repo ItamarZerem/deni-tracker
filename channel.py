@@ -683,6 +683,13 @@ def announce(state: dict) -> None:
     text = announce_text(past, nxt)
     if len(text) > 1024:  # ‏מגבלת כיתוב של תמונה בטלגרם
         raise RuntimeError("הפוסט ארוך מדי")
+    old = state.get("announce")
+    if old and not old.get("done"):  # ‏טיוטה קודמת: בלי כפתורים, כדי שלא תפורסם בטעות
+        try:
+            tg("editMessageReplyMarkup", {"chat_id": ADMIN, "message_id": old["draft"],
+                                          "reply_markup": {"inline_keyboard": []}})
+        except Exception as e:
+            print("עדכון טיוטה נכשל:", e)
     look = team_look(team)
     photo = card.announce_card(look, "חוזרים לעדכן!",
                                [season_label(now), "כל משחק של דני ופורטלנד", "לפני, במהלך ואחרי"], tracker.ICON)

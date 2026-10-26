@@ -312,5 +312,39 @@ class Updates(unittest.TestCase):
         self.assertEqual(self.state["games"]["1"]["headline"], "")
 
 
+class Announce(unittest.TestCase):
+    def test_text(self):
+        g1 = game(tip="2026-10-22T02:00:00+00:00", home=True, abbr="PHX", gid="1")
+        g2 = game(tip="2026-10-24T02:00:00+00:00", abbr="SAC", gid="2")
+        past = [(g1, summary(completed=True, ours=110, theirs=100, periods=4, deni=PLAYED)),
+                (g2, summary(completed=True, ours=99, theirs=101, periods=5, deni=DNP))]
+        text = channel.announce_text(past, game())
+        self.assertTrue(text.startswith("חוזרים לעדכן!"))
+        self.assertIn("🔸 פתיחת העונה, בבית מול פיניקס: ניצחון 110-100\n"
+                      "דני: 12 נקודות, 4 ריבאונדים, 3 אסיסטים ב-17 דקות", text)
+        self.assertIn("🔸 24.10, בחוץ מול סקרמנטו: הפסד 101-99 אחרי הארכה\nדני לא שיחק", text)
+        self.assertTrue(text.endswith("משחק הבא בין שלישי לרביעי (5:00) נגד הלייקרס (בחוץ)"))
+        self.assertLess(len(text), 1024)
+
+    def test_season_label(self):
+        self.assertEqual(channel.season_label(dt.datetime(2026, 10, 26)), "עונת 2026/27")
+        self.assertEqual(channel.season_label(dt.datetime(2027, 3, 1)), "עונת 2026/27")
+
+    def test_publish_only_after_go(self):
+        sent = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(channel, "tg", lambda m, p, photo=None: sent.append((m, p.get("chat_id"))) or {}), \
+                mock.patch.object(channel, "STATE_PATH", os.path.join(tmp.name, "s.json")), \
+                mock.patch.object(channel, "CHANNEL", "@chan"), mock.patch.object(channel, "ADMIN", "111"):
+            state = {"announce": {"draft": 3, "photo": "F", "caption": "c"}}
+            channel.announce_answer(state, "no")
+            self.assertNotIn(("sendPhoto", "@chan"), sent)
+            state = {"announce": {"draft": 3, "photo": "F", "caption": "c"}}
+            channel.announce_answer(state, "go")
+            channel.announce_answer(state, "go")   # ‏לחיצה כפולה - פרסום אחד
+            self.assertEqual(sent.count(("sendPhoto", "@chan")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

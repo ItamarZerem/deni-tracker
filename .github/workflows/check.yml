@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check = בדיקה אחת · watch = מצב שמירה לאורך כל המשחק'
+        description: 'check = בדיקה אחת · watch = מצב שמירה לאורך כל המשחק · announce = טיוטת פוסט «חוזרים» לאיתמר'
         type: choice
-        options: [check, watch]
+        options: [check, watch, announce]
         default: check
   push:
     branches: [main]
@@ -68,7 +68,7 @@ jobs:
       - id: ch
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        run: python3 channel.py
+        run: python3 channel.py ${{ inputs.mode == 'announce' && 'announce' || '' }}
       - if: always() && steps.ch.outputs.changed == 'true'
         uses: actions/cache/save@v4
         with:

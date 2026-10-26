@@ -125,3 +125,32 @@ def preview_card(us: dict, them: dict, when: str, date: str, label: str = "",
     out = io.BytesIO()
     img.convert("RGB").save(out, "JPEG", quality=90)
     return out.getvalue()
+
+
+def announce_card(team: dict, title: str, lines: list, player_png: str) -> bytes:
+    """‏תמונה להודעה כללית (למשל «חוזרים לעדכן»): כל הרקע בצבע הקבוצה, דני משמאל,
+    והטקסט מימין. ‏team: {"logo": url, "color": hex, "alt": hex}."""
+    c = team_color(team["color"], team.get("alt", ""))
+    img = background(c, mix(BASE, c, 0.5)).convert("RGBA")
+
+    p = fetch_image(player_png)
+    p.thumbnail((700, 560), Image.LANCZOS)
+    img.alpha_composite(p, (20, H - p.height))
+
+    logo = fetch_image(team["logo"])
+    logo.thumbnail((130, 130), Image.LANCZOS)
+    img.alpha_composite(logo, (W - 60 - logo.width, 50))
+
+    draw = ImageDraw.Draw(img)
+    right = W - 70
+    draw.text((right - 160, 115), get_display(CHANNEL), font=font(30, 600),
+              fill=(255, 255, 255, 215), anchor="rm")
+    draw.text((right, 300), get_display(title), font=font(96, 900), anchor="rm")
+    y = 400
+    for line in lines:
+        draw.text((right, y), get_display(line), font=font(40, 500), fill=(255, 255, 255, 225), anchor="rm")
+        y += 58
+
+    out = io.BytesIO()
+    img.convert("RGB").save(out, "JPEG", quality=90)
+    return out.getvalue()

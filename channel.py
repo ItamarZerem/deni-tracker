@@ -579,6 +579,9 @@ def handle_updates(state: dict, games: list) -> None:
             except Exception:
                 pass  # ‏עבר יותר מדי זמן מהלחיצה (הריצות כל 5 דקות). ‏לא חשוב.
             gid, action, *rest = q.get("data", "").split("|") + [""]
+            if gid == "ann":
+                announce_answer(state, action)
+                continue
             gs = state["games"].get(gid)
             if not gs or gs.get("preview"):
                 continue
@@ -615,6 +618,103 @@ def handle_updates(state: dict, games: list) -> None:
             refresh_draft(by_id[gid], state["games"][gid])
 
 
+# ---------------------------------------------------------------- פוסט החזרה (חד-פעמי)
+# ‏איתמר ביקש פוסט «חוזרים לעדכן» עם סיכום קצר של המשחקים שכבר היו. ‏⛔ התוצאות לא עוברות
+# ‏דרך הצ'אט או הטרמינל: הפוסט נבנה ב-Actions (`mode=announce`) ונשלח לאיתמר בפרטי עם
+# ‏כפתורים, והריצה הרגילה מפרסמת אותו בערוץ רק אחרי שהוא לחץ «לפרסם».
+
+ANNOUNCE_INTRO = """חוזרים לעדכן! 🏀🔥
+
+הערוץ חוזר לפעול, והפעם עם עדכונים קבועים לכל משחק של דני ופורטלנד:
+📣 ביום המשחק: מתי, נגד מי ואיפה משודר
+⚠️ אם דני בספק למשחק, ועדכון כשיש החלטה
+⏸️ במחצית: התוצאה והמספרים של דני
+🏁 בסיום: התוצאה, הסטטיסטיקה המלאה והמשחק הבא"""
+
+
+def season_label(t: dt.datetime) -> str:
+    y = t.year if t.month >= 8 else t.year - 1
+    return f"עונת {y}/{(y + 1) % 100:02d}"
+
+
+def recap_line(game: dict, data: dict, first: bool) -> str:
+    """‏שורה קצרה על משחק שכבר היה: תוצאה, ושלושת המספרים העיקריים של דני."""
+    ours, theirs, ot = scores(data, game)
+    il = game["tip"].astimezone(IL)
+    when = "פתיחת העונה" if first else f"{il.day}.{il.month}"
+    side = "בבית" if game["home"] else "בחוץ"
+    result = "ניצחון" if ours > theirs else "הפסד"
+    extra = " אחרי הארכה" if ot == 1 else f" אחרי {ot} הארכות" if ot else ""
+    head = f"🔸 {when}, {side} מול {team_he(game['them']['abbr'])}: {result} {score(ours, theirs)}{extra}"
+    row = deni_box(data)
+    if minutes(row):
+        deni = (f"דני: {count(row.get('PTS', 0), 'נקודה', 'נקודות')}, "
+                f"{count(row.get('REB', 0), 'ריבאונד', 'ריבאונדים')}, "
+                f"{count(row.get('AST', 0), 'אסיסט', 'אסיסטים')} ב-{row.get('MIN', 0)} דקות")
+    else:
+        deni = "דני לא שיחק"
+    return f"{head}\n{deni}"
+
+
+def announce_text(past: list, nxt: Optional[dict]) -> str:
+    """‏past: [(game, summary)] של המשחקים שכבר נגמרו העונה, לפי הסדר."""
+    parts = [ANNOUNCE_INTRO]
+    if past:
+        parts.append("מה היה עד עכשיו:\n" + "\n\n".join(
+            recap_line(g, d, i == 0 and g["type"] == 2) for i, (g, d) in enumerate(past)))
+    if nxt:
+        parts.append(next_game_line(nxt))
+    return "\n\n".join(parts)
+
+
+def announce(state: dict) -> None:
+    import card
+    now = now_utc()
+    team = os.environ.get("DENI_TEAM") or tracker.current_team_id()
+    games = schedule(team)
+    nxt = next((g for g in games if g["tip"] > now), None)
+    start = dt.datetime(now.year if now.month >= 8 else now.year - 1, 8, 1, tzinfo=dt.timezone.utc)
+    past = []
+    for g in games:
+        if start <= g["tip"] < now:
+            data = get_json(f"{ESPN}/summary?event={g['id']}")
+            if tracker.game_status(data).get("completed"):
+                past.append((g, data))
+    text = announce_text(past, nxt)
+    if len(text) > 1024:  # ‏מגבלת כיתוב של תמונה בטלגרם
+        raise RuntimeError("הפוסט ארוך מדי")
+    look = team_look(team)
+    photo = card.announce_card(look, "חוזרים לעדכן!",
+                               [season_label(now), "כל משחק של דני ופורטלנד", "לפני, במהלך ואחרי"], tracker.ICON)
+    msg = tg("sendPhoto", {"chat_id": ADMIN, "caption": text, "reply_markup": {"inline_keyboard": [[
+        {"text": "✅ לפרסם בערוץ", "callback_data": "ann|go"},
+        {"text": "🚫 לבטל", "callback_data": "ann|no"}]]}}, photo)
+    tg("sendMessage", {"chat_id": ADMIN, "text": "☝️ טיוטה לפוסט החזרה. כך בדיוק הוא ייראה בערוץ. "
+                                                "הפרסום יוצא תוך 5 דקות מהלחיצה."})
+    state["announce"] = {"draft": msg.get("message_id"), "caption": text,
+                         "photo": (msg.get("photo") or [{}])[-1].get("file_id", "")}
+    save_state(state)
+    print("נשלח")
+
+
+def announce_answer(state: dict, action: str) -> None:
+    ann = state.get("announce")
+    if not ann or ann.get("done"):
+        return
+    if action == "go":
+        tg("sendPhoto", {"chat_id": CHANNEL, "photo": ann["photo"], "caption": ann["caption"]})
+        print("נשלח")
+    ann["done"] = True
+    save_state(state)
+    try:
+        tg("editMessageReplyMarkup", {"chat_id": ADMIN, "message_id": ann["draft"],
+                                      "reply_markup": {"inline_keyboard": []}})
+        tg("sendMessage", {"chat_id": ADMIN, "text": "✅ פורסם בערוץ" if action == "go" else "🚫 בוטל",
+                           "reply_parameters": {"message_id": ann["draft"]}})
+    except Exception as e:
+        print("עדכון טיוטה נכשל:", e)
+
+
 def run() -> None:
     if not DRY and not (TOKEN and CHANNEL):
         print("הבוט לא מוגדר")
@@ -639,4 +739,8 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    if sys.argv[1:] == ["announce"]:
+        if DRY or (TOKEN and CHANNEL and ADMIN):
+            announce(load_state())
+    else:
+        run()

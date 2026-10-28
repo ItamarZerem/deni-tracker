@@ -59,6 +59,12 @@ class Times(unittest.TestCase):
         self.assertEqual(channel.clock(dt.datetime(2026, 10, 28, 3, 0, tzinfo=UTC)), "5:00")
         self.assertEqual(channel.date_he(dt.datetime(2026, 10, 28, 3, 0, tzinfo=UTC)), "יום רביעי 28.10")
 
+    def test_card_name(self):
+        # ‏בטקסט «אצל הלייקרס», בתמונה רק «לייקרס».
+        self.assertEqual(channel.card_name("LAL"), "לייקרס")
+        self.assertEqual(channel.card_name("LAC"), "קליפרס")
+        self.assertEqual(channel.card_name("POR"), "פורטלנד")
+
 
 class Texts(unittest.TestCase):
     def test_opening_variants(self):
@@ -302,7 +308,8 @@ class Videos(unittest.TestCase):
         g = game(tip=tip.isoformat(), abbr="SAC")
         data = summary()
         data["header"]["competitions"][0]["competitors"][1]["team"].update(name="Kings", location="Sacramento")
-        data["videos"] = [{"headline": "Portland vs. Sacramento: Game Highlights", "links": {"web": {"href": "https://espn/g"}}}]
+        data["videos"] = [{"headline": "Deni Avdija drains the three", "links": {"web": {"href": "https://espn/d"}}},
+                          {"headline": "Portland vs. Sacramento: Game Highlights", "links": {"web": {"href": "https://espn/g"}}}]
         late = tip + dt.timedelta(hours=3)
         feeds = {
             channel.TEAM_YOUTUBE["POR"]: [
@@ -315,8 +322,8 @@ class Videos(unittest.TestCase):
         }
         with mock.patch.object(channel, "youtube", lambda cid: feeds[cid]):
             self.assertEqual(channel.find_videos(g, data), {"deni": "https://yt/d", "game": "https://yt/g"})
-        with mock.patch.object(channel, "youtube", lambda cid: []):   # ‏אין יוטיוב - ESPN
-            self.assertEqual(channel.find_videos(g, data), {"deni": None, "game": "https://espn/g"})
+        with mock.patch.object(channel, "youtube", lambda cid: []):   # ‏אין יוטיוב: לא נופלים ל-ESPN
+            self.assertEqual(channel.find_videos(g, data), {"deni": None, "game": None})
 
 
 class Updates(unittest.TestCase):

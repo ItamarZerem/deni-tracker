@@ -89,6 +89,12 @@ def team_he(abbr: str) -> str:
     return TEAMS_HE.get(abbr, abbr)
 
 
+def card_name(abbr: str) -> str:
+    """‏בתמונה בלי ה' הידיעה: «לייקרס» ולא «הלייקרס»."""
+    name = team_he(abbr)
+    return name[1:] if name.startswith("ה") else name
+
+
 # ---------------------------------------------------------------- זמנים
 
 def preview_at(tip: dt.datetime) -> dt.datetime:
@@ -434,8 +440,8 @@ def card_for(game: dict, status: tuple) -> bytes:
     import card
     us, them = game["us"], game["them"]
     return card.preview_card(
-        {"name": team_he(us["abbr"]), **team_look(us["id"])},
-        {"name": team_he(them["abbr"]), **team_look(them["id"])},
+        {"name": card_name(us["abbr"]), **team_look(us["id"])},
+        {"name": card_name(them["abbr"]), **team_look(them["id"])},
         f"{when_word(game['tip'])} {clock(game['tip'])}", date_he(game["tip"]),
         SEASON_LABEL.get(game["type"], ""),
         {"Questionable": "בספק למשחק", "Doubtful": "בספק גדול", "Out": "לא ישחק"}.get(status[0], ""),
@@ -568,8 +574,8 @@ def final_card(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict])
                 f"{count(row.get('AST', 0), 'אסיסט', 'אסיסטים')}")
     else:
         chip = "דני לא שיחק"
-    return card.score_card({"name": team_he(us["abbr"]), **team_look(us["id"])},
-                           {"name": team_he(them["abbr"]), **team_look(them["id"])},
+    return card.score_card({"name": card_name(us["abbr"]), **team_look(us["id"])},
+                           {"name": card_name(them["abbr"]), **team_look(them["id"])},
                            ours, theirs, title, chip, tracker.ICON)
 
 
@@ -589,7 +595,8 @@ def publish_final(game: dict, data: dict, nxt: Optional[dict]) -> None:
 
 
 # ---------------------------------------------------------------- היילייטס
-# ‏רק קישורים למקורות רשמיים (יוטיוב של הקבוצה ושל ה-NBA, ו-ESPN). ‏לא מעלים סרטונים מחדש:
+# ‏רק קישורים למקורות רשמיים (יוטיוב של הקבוצה ושל ה-NBA). ‏לא ESPN: שם כל מהלך בודד הוא
+# ‏סרטון עם השם של דני, והקישורים פגים אחרי זמן קצר. ‏לא מעלים סרטונים מחדש:
 # ‏הזכויות של ה-NBA. ‏בטלגרם קישור ליוטיוב מוצג עם תמונה וכפתור הפעלה.
 
 TEAM_YOUTUBE = {"POR": "UCXk66yyzXo7-2M1BMqLhltQ"}   # ‏קבוצה חדשה אחרי טרייד: להוסיף כאן
@@ -614,7 +621,7 @@ def youtube(channel_id: str) -> list:
 
 
 def find_videos(game: dict, data: dict) -> dict:
-    """‏{"deni": קישור או None, "game": קישור או None}. ‏יוטיוב קודם (תצוגה יפה יותר בטלגרם)."""
+    """‏{"deni": קישור או None, "game": קישור או None}, מהיוטיוב של הקבוצה ושל ה-NBA."""
     them = next((c["team"] for c in data["header"]["competitions"][0]["competitors"]
                  if c["team"]["id"] == game["them"]["id"]), {})
     them_names = [n for n in (them.get("name"), them.get("location")) if n]
@@ -633,15 +640,6 @@ def find_videos(game: dict, data: dict) -> dict:
             if not found["game"] and cid != NBA_YOUTUBE and title.startswith("Game Highlights") \
                     and any(n in title for n in them_names):
                 found["game"] = link
-    for v in data.get("videos", []):
-        link = ((v.get("links") or {}).get("web") or {}).get("href")
-        headline = v.get("headline", "")
-        if not link:
-            continue
-        if not found["deni"] and tracker.LAST_NAME in headline:
-            found["deni"] = link
-        if not found["game"] and "Game Highlights" in headline:
-            found["game"] = link
     return found
 
 

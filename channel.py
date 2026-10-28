@@ -606,10 +606,21 @@ HL_UNTIL = dt.timedelta(hours=4)      # ‏אחרי זה מפסיקים לחפש
 
 
 def youtube(channel_id: str) -> list:
-    """‏[(כותרת, קישור, זמן פרסום)] מה-RSS של ערוץ יוטיוב (15 האחרונים, בלי מפתח)."""
-    req = urllib.request.Request(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
-                                 headers={"User-Agent": "Mozilla/5.0"})
-    page = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+    """‏[(כותרת, קישור, זמן פרסום)]: מה-RSS של הערוץ (15 האחרונים, בלי מפתח). ‏ה-RSS של יוטיוב
+    מחזיר לפעמים 404 לכל הערוצים (כך ב-29.10.26), ואז קוראים את דף הסרטונים של הערוץ."""
+    try:
+        return youtube_rss(channel_id)
+    except Exception:
+        return youtube_page(get_text(f"https://www.youtube.com/channel/{channel_id}/videos"), now_utc())
+
+
+def get_text(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US"})
+    return urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+
+
+def youtube_rss(channel_id: str) -> list:
+    page = get_text(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
     out = []
     for e in re.findall(r"<entry>(.*?)</entry>", page, re.S):
         title = re.search(r"<title>(.*?)</title>", e, re.S)
@@ -617,6 +628,41 @@ def youtube(channel_id: str) -> list:
         pub = re.search(r"<published>(.*?)</published>", e)
         if title and link and pub:
             out.append((html.unescape(title.group(1)), link.group(1), parse_time(pub.group(1))))
+    return out
+
+
+# ‏«5 hours ago» או בקיצור «5h ago» (כך יוטיוב מציג כרגע). ‏mo לפני m, כדי ש-«2mo» לא ייקרא כדקות.
+AGO = [("mo", 2592000), ("s", 1), ("m", 60), ("h", 3600), ("d", 86400), ("w", 604800), ("y", 31536000)]
+
+
+def youtube_page(page: str, now: dt.datetime) -> list:
+    """‏דף הסרטונים של ערוץ. ‏אין שם זמן מדויק, רק «לפני 5 שעות». ‏יוטיוב מעגל כלפי מטה, ולכן
+    הזמן שמחושב מאוחר מהאמיתי: תקציר של משחק קודם («לפני יום») לא ייראה כחדש."""
+    m = re.search(r"var ytInitialData = (\{.*?\});</script>", page, re.S)
+    if not m:
+        raise RuntimeError("דף יוטיוב בלי ytInitialData")
+    out = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            lock = o.get("lockupViewModel")
+            if isinstance(lock, dict) and lock.get("contentId"):
+                md = lock.get("metadata", {}).get("lockupMetadataViewModel", {})
+                title = md.get("title", {}).get("content", "")
+                rows = md.get("metadata", {}).get("contentMetadataViewModel", {}).get("metadataRows", [])
+                parts = " ".join(p.get("text", {}).get("content", "") for r in rows for p in r.get("metadataParts", []))
+                ago = re.search(r"(\d+)\s*([a-z]+) ago", parts)
+                unit = ago and next((sec for pre, sec in AGO if ago.group(2).startswith(pre)), None)
+                if title and unit:
+                    pub = now - dt.timedelta(seconds=int(ago.group(1)) * unit)
+                    out.append((title, f"https://www.youtube.com/watch?v={lock['contentId']}", pub))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(json.loads(m.group(1)))
     return out
 
 
@@ -657,6 +703,26 @@ def highlights_phase(game: dict, gs: dict, now: dt.datetime, data: dict) -> None
     elif found["game"] and not gs.get("hl_game") and (since >= HL_WAIT or not played):
         post(f"🎥 תקציר המשחק\n{found['game']}")
         gs["hl_game"] = True
+
+
+def highlights_now() -> None:
+    """‏ידני (Run workflow, mode=highlights): ההיילייטס של המשחק האחרון שהסתיים, אם החיפוש
+    האוטומטי פספס או שהקישור נמחק. ‏אותה עדיפות כמו ב-highlights_phase, בלי לחכות שעה."""
+    now = now_utc()
+    for g in reversed(schedule(os.environ.get("DENI_TEAM") or tracker.current_team_id())):
+        if g["tip"] >= now:
+            continue
+        data = get_json(f"{ESPN}/summary?event={g['id']}")
+        if not tracker.game_status(data).get("completed"):
+            continue
+        found = find_videos(g, data)
+        if minutes(deni_box(data)) and found["deni"]:
+            post(f"🎥 ההיילייטס של דני מהמשחק\n{found['deni']}")
+        elif found["game"]:
+            post(f"🎥 תקציר המשחק\n{found['game']}")
+        else:
+            print("לא נמצא סרטון")
+        return
 
 
 def handle_updates(state: dict, games: list) -> None:
@@ -853,5 +919,8 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["announce"]:
         if DRY or (TOKEN and CHANNEL and ADMIN):
             announce(load_state())
+    elif sys.argv[1:] == ["highlights"]:
+        if DRY or (TOKEN and CHANNEL):
+            highlights_now()
     else:
         run()

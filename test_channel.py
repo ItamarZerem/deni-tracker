@@ -1,5 +1,6 @@
 """בדיקות לבוט הערוץ, בלי רשת. ‏כל המספרים כאן מומצאים."""
 import datetime as dt
+import json
 import os
 import tempfile
 import unittest
@@ -324,6 +325,26 @@ class Videos(unittest.TestCase):
             self.assertEqual(channel.find_videos(g, data), {"deni": "https://yt/d", "game": "https://yt/g"})
         with mock.patch.object(channel, "youtube", lambda cid: []):   # ‏אין יוטיוב: לא נופלים ל-ESPN
             self.assertEqual(channel.find_videos(g, data), {"deni": None, "game": None})
+
+
+    def test_youtube_page(self):
+        # ‏הגיבוי כשה-RSS של יוטיוב נופל: דף הסרטונים של הערוץ, עם «לפני X» במקום זמן.
+        def item(vid, title, ago):
+            return {"richItemRenderer": {"content": {"lockupViewModel": {"contentId": vid, "metadata": {
+                "lockupMetadataViewModel": {"title": {"content": title}, "metadata": {"contentMetadataViewModel": {
+                    "metadataRows": [{"metadataParts": [{"text": {"content": "12K views"}},
+                                                        {"text": {"content": ago}}]}]}}}}}}}}
+        data = {"contents": [item("aaaaaaaaaaa", "Game Highlights: Portland Trail Blazers 110, Kings 100", "2 hours ago"),
+                             item("bbbbbbbbbbb", "Old", "1d ago"), item("ccccccccccc", "Live", "Streaming now"),
+                             item("ddddddddddd", "Older", "2mo ago")]}
+        page = f"<script>var ytInitialData = {json.dumps(data)};</script>"
+        now = dt.datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+        self.assertEqual(channel.youtube_page(page, now), [
+            ("Game Highlights: Portland Trail Blazers 110, Kings 100", "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+             dt.datetime(2026, 10, 29, 10, 0, tzinfo=UTC)),
+            ("Old", "https://www.youtube.com/watch?v=bbbbbbbbbbb", dt.datetime(2026, 10, 28, 12, 0, tzinfo=UTC)),
+            ("Older", "https://www.youtube.com/watch?v=ddddddddddd", dt.datetime(2026, 8, 30, 12, 0, tzinfo=UTC)),
+        ])
 
 
 class Updates(unittest.TestCase):

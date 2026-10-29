@@ -1,10 +1,11 @@
-"""תמונת המשחק לערוץ הטלגרם, בעיצוב קבוע.
+"""התמונות לערוץ הטלגרם, בעיצוב קבוע: משחק, סיום, הודעה כללית, השבוע ומפת זריקות.
 
 ‏1280x720: הקבוצה של דני מימין (עברית נקראת מימין לשמאל), היריבה משמאל, כל צד בצבע
 של הקבוצה, ודני במרכז. ‏למעלה שם הערוץ, ובאמצע מתי המשחק.
 ‏כל טקסט עברי עובר דרך python-bidi, והגופן נטען תמיד במנוע BASIC (ראו font).
 """
 import io
+import math
 import os
 import urllib.request
 
@@ -193,4 +194,123 @@ def announce_card(team: dict, title: str, lines: list, player_png: str) -> bytes
         draw.text((right, y), get_display(line), font=font(40, 500), fill=(255, 255, 255, 225), anchor="rm")
         y += 58
 
+    return jpeg(img)
+
+
+def overlay_box(img: Image.Image, box: tuple, radius: int, fill: tuple) -> None:
+    """‏מלבן שקוף-למחצה. ‏ציור ישיר על RGBA מחליף פיקסלים ולא מערבב, לכן שכבה נפרדת."""
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle(box, radius=radius, fill=fill)
+    img.alpha_composite(layer)
+
+
+def week_card(team: dict, title: str, dates: str, rows: list) -> bytes:
+    """‏«השבוע של דני»: שורה לכל משחק. ‏team: {"logo", "color", "alt"}.
+    ‏rows: [{"date": "יום שני 2.11", "time": "5:00", "name": "דנבר", "logo": url,
+    "side": "בחוץ", "tv": "ספורט 5"}]. ‏עד 5 שורות."""
+    c = team_color(team["color"], team.get("alt", ""))
+    img = background(c, mix(BASE, c, 0.5)).convert("RGBA")
+    logo = fetch_image(team["logo"])
+    logo.thumbnail((120, 120), Image.LANCZOS)
+    img.alpha_composite(logo, (70, 45))
+    right = W - 70
+    draw = ImageDraw.Draw(img)
+    draw.text((right, 52), get_display(CHANNEL), font=font(28, 600), fill=(255, 255, 255, 210), anchor="rm")
+    draw.text((right, 122), get_display(title), font=font(70, 900), anchor="rm")
+    draw.text((right, 188), get_display(dates), font=font(34, 500), fill=(255, 255, 255, 220), anchor="rm")
+
+    top, step = 240, 92
+    for i, r in enumerate(rows[:5]):
+        cy = top + i * step + 38
+        overlay_box(img, (60, cy - 38, W - 60, cy + 38), 22, (0, 0, 0, 80))
+        draw = ImageDraw.Draw(img)
+        draw.text((right - 20, cy), get_display(r["date"]), font=font(34, 600), anchor="rm")
+        draw.text((870, cy), r["time"], font=font(42, 800), anchor="mm")
+        opp = fetch_image(r["logo"])
+        opp.thumbnail((62, 62), Image.LANCZOS)
+        img.alpha_composite(opp, (780 - opp.width // 2, cy - opp.height // 2))
+        draw = ImageDraw.Draw(img)
+        draw.text((735, cy), get_display(r["name"]), font=font(40, 800), anchor="rm")
+        pill(draw, r["side"], 405, cy, 26, (255, 255, 255))
+        if r.get("tv"):
+            draw.text((95, cy), get_display(r["tv"]), font=font(30, 600), fill=(250, 196, 40), anchor="lm")
+    return jpeg(img)
+
+
+# ‏מגרש בפיט, כמו ב-ESPN: x מ-0 עד 50 לרוחב, y המרחק מהסל לכיוון מרכז המגרש (הסל ב-(25, 0)).
+BASELINE = -5.25
+HALF = 47 + BASELINE
+
+
+def court_lines(draw, to_px, scale: float) -> None:
+    line = (255, 255, 255)
+
+    def arc(cx, cy, r, a0, a1, n=60):
+        pts = [to_px(cx + r * math.cos(math.radians(a0 + (a1 - a0) * k / n)),
+                     cy + r * math.sin(math.radians(a0 + (a1 - a0) * k / n))) for k in range(n + 1)]
+        draw.line(pts, fill=line, width=3)
+
+    x0, y0 = to_px(0, BASELINE)
+    x1, y1 = to_px(50, HALF)
+    draw.rectangle([x0, y1, x1, y0], outline=line, width=4)
+    px0, py0 = to_px(17, BASELINE)
+    px1, py1 = to_px(33, 19 + BASELINE)
+    draw.rectangle([px0, py1, px1, py0], outline=line, width=3)       # ‏הצבע
+    arc(25, 19 + BASELINE, 6, 0, 180)                                  # ‏חצי עיגול העונשין
+    arc(25, 0, 4, 0, 180)                                              # ‏אזור החסימה
+    draw.line([to_px(22, -1.25), to_px(28, -1.25)], fill=line, width=4)   # ‏הלוח
+    hx, hy = to_px(25, 0)
+    r = 0.75 * scale
+    draw.ellipse([hx - r, hy - r, hx + r, hy + r], outline=(255, 140, 60), width=3)
+    corner = (23.75 ** 2 - 22 ** 2) ** 0.5
+    for x in (3, 47):
+        draw.line([to_px(x, BASELINE), to_px(x, corner)], fill=line, width=3)
+    a = math.degrees(math.atan2(corner, -22))
+    arc(25, 0, 23.75, 180 - a, a)                                      # ‏קשת השלוש
+    arc(25, HALF, 6, 180, 360)                                         # ‏מעגל המרכז
+
+
+def shot_card(team: dict, title: str, subtitle: str, shots: list, lines: list, player_png: str = "") -> bytes:
+    """‏מפת זריקות: המגרש משמאל, המספרים מימין. ‏shots: [(x, y, נכנסה)] בפיט, לפי ESPN.
+    ‏קליעה: עיגול ירוק. ‏החטאה: איקס אדום."""
+    c = team_color(team["color"], team.get("alt", ""))
+    img = background(c, mix(BASE, c, 0.35)).convert("RGBA")
+    if player_png:
+        p = fetch_image(player_png)
+        p.thumbnail((430, 360), Image.LANCZOS)
+        img.alpha_composite(p, (W - 40 - p.width, H - p.height))
+        bottom_fade(img, 120)
+    scale = 12.6
+    left, bottom = 45, H - 30
+
+    def to_px(x, y):
+        return left + x * scale, bottom - (y - BASELINE) * scale
+
+    overlay_box(img, (left, bottom - (HALF - BASELINE) * scale, left + 50 * scale, bottom), 0, (0, 0, 0, 70))
+    draw = ImageDraw.Draw(img)
+    court_lines(draw, to_px, scale)
+    green, red = (61, 220, 132), (255, 90, 95)
+    for x, y, made in sorted(shots, key=lambda s: s[2]):   # ‏הקליעות מעל ההחטאות
+        px, py = to_px(min(max(x, 0.5), 49.5), min(max(y, BASELINE + 0.5), HALF - 0.5))
+        if made:
+            draw.ellipse([px - 11, py - 11, px + 11, py + 11], fill=green, outline=BASE, width=3)
+        else:
+            for d in (1, -1):
+                draw.line([(px - 9, py - 9 * d), (px + 9, py + 9 * d)], fill=red, width=5)
+
+    right = W - 60
+    draw.text((right, 52), get_display(CHANNEL), font=font(28, 600), fill=(255, 255, 255, 210), anchor="rm")
+    draw.text((right, 125), get_display(title), font=font(62, 900), anchor="rm")
+    draw.text((right, 185), get_display(subtitle), font=font(32, 500), fill=(255, 255, 255, 220), anchor="rm")
+    y = 255
+    for line in lines:
+        draw.text((right, y), get_display(line), font=font(40, 700), anchor="rm")
+        y += 56
+    ly = y + 18
+    draw.ellipse([right - 22, ly - 11, right, ly + 11], fill=green, outline=BASE, width=3)
+    draw.text((right - 34, ly), get_display("קליעה"), font=font(28, 600), anchor="rm")
+    lx = right - 190
+    for d in (1, -1):
+        draw.line([(lx - 9, ly - 9 * d), (lx + 9, ly + 9 * d)], fill=red, width=5)
+    draw.text((lx - 22, ly), get_display("החטאה"), font=font(28, 600), anchor="rm")
     return jpeg(img)

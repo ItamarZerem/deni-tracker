@@ -8,7 +8,11 @@
   · הודעת המשחק בערוץ, ביום המשחק ב-12:00, עם תמונה (card.py) ומצב הכשירות של דני.
   · עדכון כשירות, אם דני היה בספק והמצב השתנה (או שהוא כבר על המגרש).
   · מחצית: תוצאה וסטטיסטיקה של דני, רק אם שיחק.
-  · סיום: תוצאה, סטטיסטיקה מלאה והמשחק הבא.
+  · סיום: תוצאה, סטטיסטיקה מלאה והמשחק הבא. ‏אחריו: אבני דרך (שיא קריירה, דאבל-דאבל,
+    רף בקריירה), מפת הזריקות של דני, תשובה לסקר, ובהמשך היילייטס.
+  · סקר «כמה נקודות דני יקלע» 3 שעות אחרי הודעת המשחק.
+  · «השבוע של דני» ביום ראשון ב-11:00, עם טיוטה לאיתמר ב-8:00.
+  · מסיבות עיתונאים של דני מהיוטיוב של הקבוצה, גם בימים בלי משחק.
 
 ‏רץ ב-GitHub Actions כל 5 דקות (טריגר חיצוני מ-cron-job.org, ראו CLAUDE.md). ‏מחוץ לחלון של
 משחק יוצא מיד. ‏המצב (מה כבר פורסם, מה איתמר בחר) נשמר ב-tgstate/state.json, שנשמר בין
@@ -101,10 +105,13 @@ def preview_at(tip: dt.datetime) -> dt.datetime:
     """‏מתי לפרסם את הודעת המשחק: ב-12:00 ביום של המשחק. ‏«יום המשחק» של משחק ב-5:00
     בלילה הוא היום שלפניו, לכן מחסירים 8 שעות לפני שלוקחים את התאריך. ‏לכל המאוחר
     3 שעות לפני הפתיחה."""
-    il = tip.astimezone(IL)
-    day = (il - dt.timedelta(hours=8)).date()
-    at = dt.datetime.combine(day, dt.time(PREVIEW_HOUR), tzinfo=IL)
+    at = dt.datetime.combine(game_day(tip), dt.time(PREVIEW_HOUR), tzinfo=IL)
     return min(at, tip - dt.timedelta(hours=3)).astimezone(dt.timezone.utc)
+
+
+def game_day(tip: dt.datetime) -> dt.date:
+    """‏משחק לילה (עד 8:00) שייך ליום שלפניו."""
+    return (tip.astimezone(IL) - dt.timedelta(hours=8)).date()
 
 
 def when_word(tip: dt.datetime) -> str:
@@ -322,17 +329,20 @@ def half_text(game: dict, ours: int, theirs: int, row: dict) -> str:
     return "\n".join(["מחצית⏸️", line, "דני עם"] + stats_lines(row, full=False))
 
 
-def next_game_line(nxt: dict) -> str:
-    """‏«משחק הבא בין שני לשלישי (5:00) נגד דנבר (בחוץ)». ‏משחק לילה נקרא לפי שני הימים."""
+def day_phrase(tip: dt.datetime) -> str:
+    """‏«בין שני לשלישי» למשחק לילה, אחרת «ביום שני» / «בשבת»."""
     names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-    il = nxt["tip"].astimezone(IL)
+    il = tip.astimezone(IL)
     day = names[il.weekday()]
     if il.hour < 8:
-        when = f"בין {names[(il.weekday() - 1) % 7]} ל{day}"
-    else:
-        when = "בשבת" if day == "שבת" else f"ביום {day}"
+        return f"בין {names[(il.weekday() - 1) % 7]} ל{day}"
+    return "בשבת" if day == "שבת" else f"ביום {day}"
+
+
+def next_game_line(nxt: dict) -> str:
+    """‏«משחק הבא בין שני לשלישי (5:00) נגד דנבר (בחוץ)». ‏משחק לילה נקרא לפי שני הימים."""
     side = "בבית" if nxt["home"] else "בחוץ"
-    return f"משחק הבא {when} ({clock(nxt['tip'])}) נגד {team_he(nxt['them']['abbr'])} ({side})"
+    return f"משחק הבא {day_phrase(nxt['tip'])} ({clock(nxt['tip'])}) נגד {team_he(nxt['them']['abbr'])} ({side})"
 
 
 def final_text(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict],
@@ -363,7 +373,7 @@ def masked(text: str) -> str:
 
 def tg(method: str, params: dict, photo: Optional[bytes] = None):
     if DRY:
-        shown = params.get("caption") or params.get("text") or ""
+        shown = params.get("caption") or params.get("text") or params.get("question") or ""
         print(f"DRY {method} → {params.get('chat_id', '')}\n{masked(shown)}\n")
         if photo and os.environ.get("DENI_OUT"):
             open(os.path.join(os.environ["DENI_OUT"], f"{params.get('chat_id')}-{uuid.uuid4().hex[:6]}.jpg"), "wb").write(photo)
@@ -516,7 +526,8 @@ def status_phase(game: dict, gs: dict, now: dt.datetime, data: Optional[dict]) -
             gs["status"] = "Available"
 
 
-def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime) -> None:
+def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime,
+            prev: Optional[dict] = None) -> None:
     gs = state["games"].setdefault(game["id"], {})
     tip, pv = game["tip"], preview_at(game["tip"])
 
@@ -528,6 +539,11 @@ def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime) -> N
     if not gs.get("preview") and not gs.get("skip") and (now >= pv or gs.get("go")) \
             and now < tip - dt.timedelta(minutes=10):
         publish_preview(game, gs)
+        save_state(state)
+
+    if gs.get("preview") and not gs.get("poll") and gs.get("status") == "Available" \
+            and poll_at(tip) <= now < tip:
+        safely(send_poll, game, gs)
         save_state(state)
 
     data = None
@@ -560,6 +576,7 @@ def process(game: dict, nxt: Optional[dict], state: dict, now: dt.datetime) -> N
             gs["final"], gs["final_at"] = True, now.isoformat()
             save_state(state)
     if gs.get("final_at"):
+        after_final(game, gs, now, data, prev)
         highlights_phase(game, gs, now, data)
         save_state(state)
 
@@ -592,6 +609,336 @@ def publish_final(game: dict, data: dict, nxt: Optional[dict]) -> None:
         return
     tg("sendPhoto", {"chat_id": CHANNEL, "caption": text}, photo)
     print("נשלח")
+
+
+def safely(fn, *args) -> None:
+    """‏לתוספות (סקר, אבני דרך, מפת זריקות, השבוע, ראיונות): תקלה באחת מהן לא תעצור את
+    ההודעות העיקריות. ‏בלוג רק סוג השגיאה, בלי תוכן."""
+    try:
+        fn(*args)
+    except Exception as e:
+        print(f"{fn.__name__} נכשל:", type(e).__name__)
+
+
+# ---------------------------------------------------------------- סקר
+
+POLL_OPTIONS = [("פחות מ-15", 0, 14), ("15 עד 19", 15, 19), ("20 עד 24", 20, 24),
+                ("25 עד 29", 25, 29), ("30 ומעלה", 30, 999)]
+POLL_AFTER = dt.timedelta(hours=3)
+
+
+def poll_at(tip: dt.datetime) -> dt.datetime:
+    """‏3 שעות אחרי הודעת המשחק, ולכל המאוחר שעה לפני הפתיחה."""
+    return min(preview_at(tip) + POLL_AFTER, tip - dt.timedelta(hours=1))
+
+
+def send_poll(game: dict, gs: dict) -> None:
+    msg = tg("sendPoll", {"chat_id": CHANNEL, "question": f"כמה נקודות דני יקלע {when_word(game['tip'])}? 🏀",
+                          "options": [{"text": o[0]} for o in POLL_OPTIONS]})
+    gs["poll"] = msg["message_id"]
+    print("נשלח")
+
+
+def poll_answer(row: Optional[dict]) -> str:
+    if not minutes(row):
+        return "דני לא שיחק בסוף, אז אין תשובה הפעם"
+    pts = int(row.get("PTS") or 0)
+    option = next(o[0] for o in POLL_OPTIONS if o[1] <= pts <= o[2])
+    return f"✅ התשובה: {option} (דני קלע {count(pts, 'נקודה', 'נקודות')})"
+
+
+def close_poll(gs: dict, data: dict) -> None:
+    gs["poll_closed"] = True
+    try:
+        tg("stopPoll", {"chat_id": CHANNEL, "message_id": gs["poll"]})
+    except Exception as e:
+        print("סגירת הסקר נכשלה:", type(e).__name__)
+    tg("sendMessage", {"chat_id": CHANNEL, "text": poll_answer(deni_box(data)),
+                       "reply_parameters": {"message_id": gs["poll"]}})
+    print("נשלח")
+
+
+# ---------------------------------------------------------------- אבני דרך
+
+STATS = ("PTS", "REB", "AST", "STL", "BLK")
+HIGH_MIN = {"PTS": 20, "REB": 10, "AST": 8}   # ‏מתחת לזה «שיא» הוא כנראה תקלה בנתונים
+TOTAL_STEP = {"PTS": 1000, "REB": 500, "AST": 500}
+STAT_HE = {"PTS": "נקודות", "REB": "ריבאונדים", "AST": "אסיסטים"}
+# ‏הפליי-אין נקרא ב-ESPN «Play In Regular Season», לכן נבדק לפני העונה הסדירה.
+SEASON_KIND = (("Play In", 5), ("Play-In", 5), ("Postseason", 3), ("Regular Season", 2))
+
+
+def num(v) -> int:
+    v = str(v or "0").replace(",", "")
+    return int(v) if v.isdigit() else 0
+
+
+def career_log() -> list:
+    """‏כל המשחקים של דני ב-NBA (בלי משחקי הכנה ובלי אולסטאר), מה-gamelog של ESPN, עונה אחרי
+    עונה: [{"id", "type", "season", "MIN", "PTS", ...}]. ‏נבדק מול הסיכומים העונתיים של ESPN.
+    ‏משחקי האולסטאר מופיעים שם בתוך העונה הסדירה, בקבוצות כמו WORLD (מזהה גבוה מ-30)."""
+    url = f"{ESPN_WEB}/athletes/{PLAYER_ID}/gamelog"
+    first = get_json(url)
+    seasons = [o["value"] for f in first.get("filters", []) if f.get("name") == "season" for o in f["options"]]
+    if not seasons:
+        raise RuntimeError("אין רשימת עונות")
+    out = []
+    for y in seasons:
+        d = get_json(f"{url}?season={y}")
+        labels = d.get("labels", [])
+        for st in d.get("seasonTypes", []):
+            kind = next((k for name, k in SEASON_KIND if name in st.get("displayName", "")), None)
+            if kind is None:
+                continue
+            for c in st.get("categories", []):
+                if c.get("type") != "event":
+                    continue
+                for e in c.get("events", []):
+                    team = (d.get("events", {}).get(str(e["eventId"])) or {}).get("team", {}).get("id", "0")
+                    if not 1 <= num(team) <= 30:
+                        continue
+                    row = dict(zip(labels, e.get("stats", [])))
+                    out.append({"id": str(e["eventId"]), "type": kind, "season": int(y),
+                                **{k: num(row.get(k)) for k in ("MIN",) + STATS}})
+    return out
+
+
+def ordinal(n: int, first: str) -> str:
+    return first if n == 1 else f"ה-{n}"
+
+
+def milestones(game: dict, row: dict, log: list) -> list:
+    """‏מה מיוחד במשחק הזה, ביחס לכל המשחקים הקודמים של דני. ‏log בלי המשחק הנוכחי.
+    ‏רף בקריירה ומספר משחקים נספרים רק בעונה הסדירה, כמו ב-NBA."""
+    cur = {k: num(row.get(k)) for k in STATS}
+    lines = []
+    for k in ("PTS", "REB", "AST"):
+        best = max((g[k] for g in log), default=0)
+        if cur[k] >= HIGH_MIN[k] and cur[k] > best:
+            lines.append(f"🏆 שיא קריירה לדני: {cur[k]} {STAT_HE[k]}!")
+        elif cur[k] >= HIGH_MIN[k] and cur[k] == best:
+            lines.append(f"🏆 דני השווה את שיא הקריירה שלו: {cur[k]} {STAT_HE[k]}")
+    tens = lambda r: sum(r[k] >= 10 for k in STATS)
+    if tens(cur) >= 3:
+        n = 1 + sum(tens(g) >= 3 for g in log)
+        lines.append(f"🔥 טריפל-דאבל לדני! {ordinal(n, 'הראשון')} בקריירה")
+    elif tens(cur) == 2 and game["type"] == 2:
+        season = max((g["season"] for g in log), default=0)
+        n = 1 + sum(tens(g) == 2 for g in log if g["season"] == season and g["type"] == 2)
+        lines.append(f"💪 דאבל-דאבל לדני, {ordinal(n, 'הראשון')} שלו העונה")
+    if game["type"] == 2:
+        regular = [g for g in log if g["type"] == 2]
+        for k, step in TOTAL_STEP.items():
+            before = sum(g[k] for g in regular)
+            after = before + cur[k]
+            if after // step > before // step:
+                lines.append(f"🎉 דני עבר את רף {after // step * step:,} ה{STAT_HE[k]} בקריירה ב-NBA!")
+        n = 1 + sum(g["MIN"] > 0 for g in regular)
+        if n % 100 == 0:
+            lines.append(f"🎂 המשחק ה-{n} של דני בעונה הסדירה של ה-NBA")
+    return lines
+
+
+def log_has_previous(log: list, prev: Optional[dict]) -> bool:
+    """‏ה-gamelog מתעדכן באיחור. ‏אם חסר בו המשחק הקודם, השיאים והסכומים לא נכונים."""
+    if prev is None or prev["id"] in {g["id"] for g in log}:
+        return True
+    return not minutes(deni_box(get_json(f"{ESPN}/summary?event={prev['id']}")))
+
+
+def milestones_phase(game: dict, gs: dict, row: dict, prev: Optional[dict]) -> None:
+    log = [g for g in career_log() if g["id"] != game["id"]]
+    if not log_has_previous(log, prev):
+        return   # ‏ננסה שוב בריצה הבאה
+    gs["milestones"] = True
+    lines = milestones(game, row, log)
+    if lines:
+        post("\n".join(lines))
+
+
+# ---------------------------------------------------------------- מפת זריקות
+
+def deni_shots(data: dict) -> list:
+    """‏[(x, y, נכנסה)] של הזריקות מהשדה של דני (בלי עונשין). ‏זריקה בלי מיקום תקין היא None,
+    ואז אין תמונה."""
+    out = []
+    for p in data.get("plays", []):
+        parts = p.get("participants") or []
+        if not p.get("shootingPlay") or not parts or parts[0].get("athlete", {}).get("id") != PLAYER_ID:
+            continue
+        if "free throw" in (p.get("type") or {}).get("text", "").lower():
+            continue
+        c = p.get("coordinate") or {}
+        x, y = c.get("x"), c.get("y")
+        if not (isinstance(x, (int, float)) and isinstance(y, (int, float)) and -5 <= x <= 55 and -10 <= y <= 90):
+            out.append(None)
+            continue
+        if is_heave(p, x, y):
+            continue
+        out.append((x, y, bool(p.get("scoringPlay"))))
+    return out
+
+
+def is_heave(p: dict, x: float, y: float) -> bool:
+    """‏מהעונה 2025-26: החטאה מעבר ל-36 רגל בשלוש השניות האחרונות של רבע 1-3 לא נספרת כזריקה
+    של השחקן, ולכן גם לא ב-boxscore."""
+    clock = (p.get("clock") or {}).get("displayValue", "")
+    secs = float(clock) if re.fullmatch(r"\d+(\.\d+)?", clock) else 99
+    return (not p.get("scoringPlay") and (p.get("period") or {}).get("number", 4) <= 3 and secs <= 3
+            and ((x - 25) ** 2 + y ** 2) ** 0.5 > 36)
+
+
+SHOTS_WAIT = dt.timedelta(hours=1)   # ‏ה-play-by-play משלים לפעמים באיחור
+
+
+def shots_phase(game: dict, gs: dict, now: dt.datetime, data: dict, row: dict) -> None:
+    import card
+    fg, three = made(row.get("FG")), made(row.get("3PT"))
+    shots = deni_shots(data)
+    if fg[1] == 0 or len(shots) != fg[1] or None in shots:
+        if fg[1] == 0 or now - parse_time(gs["final_at"]) > SHOTS_WAIT:
+            gs["shots"] = True
+        return
+    two = (fg[0] - three[0], fg[1] - three[1])
+    lines = [f"{fg[0]} מ-{fg[1]} מהשדה"] + [f"{m} מ-{a} {where}" for (m, a), where in
+                                             ((two, "לשתיים"), (three, "לשלוש")) if a]
+    photo = card.shot_card(team_look(game["us"]["id"]), "מפת הזריקות",
+                           f"נגד {card_name(game['them']['abbr'])} · {date_he(game['tip'])}",
+                           shots, lines, tracker.ICON)
+    tg("sendPhoto", {"chat_id": CHANNEL, "caption": f"🎯 הזריקות של דני נגד {team_he(game['them']['abbr'])}"}, photo)
+    gs["shots"] = True
+    print("נשלח")
+
+
+def after_final(game: dict, gs: dict, now: dt.datetime, data: dict, prev: Optional[dict]) -> None:
+    """‏מה שיוצא אחרי הודעת הסיום: תשובה לסקר, אבני דרך ומפת זריקות. ‏כל אחד פעם אחת."""
+    if gs.get("poll") and not gs.get("poll_closed"):
+        safely(close_poll, gs, data)
+    row = deni_box(data)
+    if not minutes(row):
+        return
+    if not gs.get("milestones") and now - parse_time(gs["final_at"]) < GAME_UNTIL:
+        safely(milestones_phase, game, gs, row, prev)
+    if not gs.get("shots"):
+        safely(shots_phase, game, gs, now, data, row)
+
+
+# ---------------------------------------------------------------- ראיונות
+
+INTERVIEW_WORDS = ("Postgame", "Media Availability", "Interview", "Press Conference")
+
+
+def interviews_phase(state: dict, now: dt.datetime, abbr: str) -> None:
+    """‏ראיון או מסיבת עיתונאים של דני ביוטיוב של הקבוצה, גם בימים בלי משחק. ‏בודקים פעם בחצי
+    שעה (הריצות כל 5 דקות), ורק סרטונים מה-24 השעות האחרונות."""
+    cid = TEAM_YOUTUBE.get(abbr)
+    if not cid or now.minute % 30 >= 5:
+        return
+    posted = state.setdefault("yt_posted", [])
+    new = False
+    for title, link, pub in sorted(youtube(cid), key=lambda v: v[2]):
+        if link in posted or now - pub >= dt.timedelta(hours=24) or "Highlights" in title:
+            continue
+        if tracker.LAST_NAME not in title or not any(w in title for w in INTERVIEW_WORDS):
+            continue
+        post(("🎙️ דני אחרי המשחק" if "Postgame" in title else "🎙️ דני מדבר עם התקשורת") + f"\n{link}")
+        posted.append(link)
+        new = True
+    if new:
+        state["yt_posted"] = posted[-30:]
+        save_state(state)
+
+
+# ---------------------------------------------------------------- השבוע של דני
+# ‏ביום ראשון: כל המשחקים של השבוע (ראשון עד שבת, לפי «יום המשחק»), עם ערוץ השידור אם הוא
+# ‏כבר ידוע (ספורט 5 מפרסם כ-5 ימים מראש). ‏טיוטה לאיתמר 3 שעות לפני, כמו בהודעת המשחק.
+
+WEEKLY_HOUR = CFG.get("weekly_hour", 11)
+WEEKLY_UNTIL = dt.timedelta(hours=8)   # ‏אם הבוט לא רץ עד אז, מוותרים על השבוע הזה
+
+
+def week_sunday(now: dt.datetime) -> dt.date:
+    d = now.astimezone(IL).date()
+    return d - dt.timedelta(days=(d.weekday() + 1) % 7)
+
+
+def week_games(games: list, sunday: dt.date) -> list:
+    return [g for g in games if sunday <= game_day(g["tip"]) <= sunday + dt.timedelta(days=6)]
+
+
+def week_text(rows: list) -> str:
+    """‏rows: [(game, ערוץ או None)]."""
+    lines = []
+    for g, tv in rows:
+        side = "בבית" if g["home"] else "בחוץ"
+        line = f"🔸 {day_phrase(g['tip'])} ({clock(g['tip'])}) נגד {team_he(g['them']['abbr'])} ({side})"
+        lines.append(line + (f" · {tv}" if tv else ""))
+    return "השבוע של דני🗓️\n\n" + "\n".join(lines)
+
+
+def week_post(gl: list) -> tuple:
+    """‏(טקסט, תמונה)."""
+    import card
+    rows = [(g, tv_for(g, {})) for g in gl]
+    # ‏התאריכים בתמונה הם התאריכים בפועל (משחק לילה ב-5:00 בבוקר של יום ראשון הבא שייך לשבוע הזה)
+    first, last = gl[0]["tip"].astimezone(IL), gl[-1]["tip"].astimezone(IL)
+    span = f"{first.day}.{first.month}" + (f" – {last.day}.{last.month}" if last.date() != first.date() else "")
+    photo = card.week_card(team_look(gl[0]["us"]["id"]), "השבוע של דני", span,
+                           [{"date": date_he(g["tip"]), "time": clock(g["tip"]), "name": card_name(g["them"]["abbr"]),
+                             "logo": team_look(g["them"]["id"])["logo"], "side": "בית" if g["home"] else "חוץ",
+                             "tv": tv or ""} for g, tv in rows])
+    return week_text(rows), photo
+
+
+def weekly_phase(state: dict, games: list, now: dt.datetime) -> None:
+    sunday = week_sunday(now)
+    wk = state.get("weekly") or {}
+    if wk.get("key") != sunday.isoformat():
+        wk = {"key": sunday.isoformat()}
+    at = dt.datetime.combine(sunday, dt.time(WEEKLY_HOUR), tzinfo=IL)
+    if wk.get("posted") or wk.get("skip") or not at - DRAFT_LEAD <= now < at + WEEKLY_UNTIL:
+        return
+    gl = week_games(games, sunday)
+    if not gl:
+        return
+    if not wk.get("draft") and ADMIN and now < at and tracker.hold_until(now) is None:
+        text, photo = week_post(gl)
+        msg = tg("sendPhoto", {"chat_id": ADMIN, "caption": f"📝 טיוטה · תתפרסם בערוץ ב-{WEEKLY_HOUR}:00\n\n{text}",
+                               "reply_markup": {"inline_keyboard": [[
+                                   {"text": "✅ לפרסם עכשיו", "callback_data": "wk|go"},
+                                   {"text": "🚫 לא לפרסם", "callback_data": "wk|skip"}]]}}, photo)
+        wk["draft"] = msg["message_id"]
+        state["weekly"] = wk
+        save_state(state)
+    if now >= at or wk.get("go"):
+        text, photo = week_post(gl)
+        tg("sendPhoto", {"chat_id": CHANNEL, "caption": text}, photo)
+        print("נשלח")
+        wk["posted"] = True
+        state["weekly"] = wk
+        save_state(state)
+        if wk.get("draft"):
+            close_weekly_draft(wk, "✅ פורסם בערוץ")
+
+
+def close_weekly_draft(wk: dict, note: str) -> None:
+    try:
+        tg("editMessageReplyMarkup", {"chat_id": ADMIN, "message_id": wk["draft"],
+                                      "reply_markup": {"inline_keyboard": []}})
+        tg("sendMessage", {"chat_id": ADMIN, "text": note, "reply_parameters": {"message_id": wk["draft"]}})
+    except Exception as e:
+        print("עדכון טיוטה נכשל:", type(e).__name__)
+
+
+def weekly_answer(state: dict, action: str) -> None:
+    wk = state.get("weekly")
+    if not wk or wk.get("posted") or wk.get("skip"):
+        return
+    if action == "go":
+        wk["go"] = True
+    elif action == "skip":
+        wk["skip"] = True
+        close_weekly_draft(wk, "🚫 לא יתפרסם")
 
 
 # ---------------------------------------------------------------- היילייטס
@@ -752,6 +1099,9 @@ def handle_updates(state: dict, games: list) -> None:
             if gid == "ann":
                 announce_answer(state, action)
                 continue
+            if gid == "wk":
+                weekly_answer(state, action)
+                continue
             gs = state["games"].get(gid)
             if not gs or gs.get("preview"):
                 continue
@@ -900,11 +1250,14 @@ def run() -> None:
     now = now_utc()
     games = schedule(os.environ.get("DENI_TEAM") or tracker.current_team_id())
     handle_updates(state, games)
+    safely(weekly_phase, state, games, now)
+    if games:
+        safely(interviews_phase, state, now, games[0]["us"]["abbr"])
     active = False
     for i, g in enumerate(games):
         if preview_at(g["tip"]) - DRAFT_LEAD <= now <= g["tip"] + GAME_UNTIL:
             active = True
-            process(g, games[i + 1] if i + 1 < len(games) else None, state, now)
+            process(g, games[i + 1] if i + 1 < len(games) else None, state, now, games[i - 1] if i else None)
     # ‏ניקוי משחקים ישנים
     old = [gid for gid in state["games"] if gid not in {g["id"] for g in games}
            or next(g for g in games if g["id"] == gid)["tip"] < now - dt.timedelta(days=3)]

@@ -178,15 +178,13 @@ class Flow(unittest.TestCase):
         channel.process(self.g, None, self.state, self.g["tip"] + dt.timedelta(minutes=minutes_from_tip))
 
     def channel_msgs(self):
-        """‏בלי הסקר ובלי התשובה אליו - יש להם בדיקות משלהם."""
-        return [t for m, c, t in self.sent if c == "@chan" and m in ("sendMessage", "sendPhoto")
-                and not t.startswith(("✅ התשובה", "דני לא שיחק בסוף"))]
+        """‏בלי הסקר - יש לו בדיקות משלו."""
+        return [t for m, c, t in self.sent if c == "@chan" and m in ("sendMessage", "sendPhoto")]
 
     def polls(self):
-        return [(m, t) for m, c, t in self.sent if c == "@chan" and (m in ("sendPoll", "stopPoll")
-                or t.startswith(("✅ התשובה", "דני לא שיחק בסוף")))]
+        return [(m, t) for m, c, t in self.sent if c == "@chan" and m in ("sendPoll", "stopPoll")]
 
-    def test_poll_after_preview_and_answer(self):
+    def test_poll_after_preview_and_closed(self):
         self.at(-17 * 60)   # ‏הודעת המשחק ב-12:00
         self.at(-14 * 60)   # ‏15:00 - הסקר
         self.at(-13 * 60)
@@ -194,18 +192,14 @@ class Flow(unittest.TestCase):
         self.data = summary(state="post", name="STATUS_FINAL", completed=True, periods=4, deni=PLAYED)
         self.at(150)
         self.at(160)
-        self.assertEqual(self.polls()[1:], [("stopPoll", ""), ("sendMessage", "✅ התשובה: פחות מ-15 (דני קלע 12 נקודות)")])
+        self.assertEqual(self.polls()[1:], [("stopPoll", "")])
+        self.assertFalse(any("התשובה" in t for t in self.channel_msgs()))   # ‏בלי תגובה עם התשובה
 
     def test_no_poll_when_doubtful(self):
         self.injury = ("Questionable", "Ankle")
         self.at(-17 * 60)
         self.at(-14 * 60)
         self.assertEqual(self.polls(), [])
-
-    def test_poll_answer_dnp(self):
-        self.assertEqual(channel.poll_answer(channel.deni_box(summary(deni=DNP))), "דני לא שיחק בסוף, אז אין תשובה הפעם")
-        row = {"MIN": "30", "PTS": "30", "dnp": False}
-        self.assertEqual(channel.poll_answer(row), "✅ התשובה: 30 ומעלה (דני קלע 30 נקודות)")
 
     def test_milestone_posted_once(self):
         self.log = [{"id": "9", "type": 2, "season": 2027, "MIN": 30, "PTS": 9, "REB": 14, "AST": 3, "STL": 0, "BLK": 0}]

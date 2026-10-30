@@ -639,23 +639,10 @@ def send_poll(game: dict, gs: dict) -> None:
     print("נשלח")
 
 
-def poll_answer(row: Optional[dict]) -> str:
-    if not minutes(row):
-        return "דני לא שיחק בסוף, אז אין תשובה הפעם"
-    pts = int(row.get("PTS") or 0)
-    option = next(o[0] for o in POLL_OPTIONS if o[1] <= pts <= o[2])
-    return f"✅ התשובה: {option} (דני קלע {count(pts, 'נקודה', 'נקודות')})"
-
-
-def close_poll(gs: dict, data: dict) -> None:
+def close_poll(gs: dict) -> None:
+    """‏סוגרים את הסקר עם הסיום, בלי תגובה עם התשובה (איתמר: «אין בזה צורך»)."""
     gs["poll_closed"] = True
-    try:
-        tg("stopPoll", {"chat_id": CHANNEL, "message_id": gs["poll"]})
-    except Exception as e:
-        print("סגירת הסקר נכשלה:", type(e).__name__)
-    tg("sendMessage", {"chat_id": CHANNEL, "text": poll_answer(deni_box(data)),
-                       "reply_parameters": {"message_id": gs["poll"]}})
-    print("נשלח")
+    tg("stopPoll", {"chat_id": CHANNEL, "message_id": gs["poll"]})
 
 
 # ---------------------------------------------------------------- אבני דרך
@@ -813,7 +800,7 @@ def shots_phase(game: dict, gs: dict, now: dt.datetime, data: dict, row: dict) -
 def after_final(game: dict, gs: dict, now: dt.datetime, data: dict, prev: Optional[dict]) -> None:
     """‏מה שיוצא אחרי הודעת הסיום: תשובה לסקר, אבני דרך ומפת זריקות. ‏כל אחד פעם אחת."""
     if gs.get("poll") and not gs.get("poll_closed"):
-        safely(close_poll, gs, data)
+        safely(close_poll, gs)
     row = deni_box(data)
     if not minutes(row):
         return

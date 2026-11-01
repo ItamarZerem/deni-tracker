@@ -463,7 +463,7 @@ class Weekly(unittest.TestCase):
 
     def test_week_text(self):
         self.assertEqual(channel.week_text([(self.games[0], "ספורט 5"), (self.games[1], None)]),
-                         "השבוע של דני🗓️\n\n🔸 בין ראשון לשני (5:00) נגד דנבר (בחוץ) · ספורט 5\n"
+                         "משחקי השבוע:\n\n🔸 בין ראשון לשני (5:00) נגד דנבר (בחוץ) · ספורט 5\n"
                          "🔸 בשבת (20:00) נגד יוטה (בבית)")
         self.assertEqual([g["id"] for g in channel.week_games(self.games, dt.date(2026, 11, 1))], ["a", "b", "c"])
 

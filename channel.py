@@ -860,7 +860,7 @@ def week_text(rows: list) -> str:
         side = "בבית" if g["home"] else "בחוץ"
         line = f"🔸 {day_phrase(g['tip'])} ({clock(g['tip'])}) נגד {team_he(g['them']['abbr'])} ({side})"
         lines.append(line + (f" · {tv}" if tv else ""))
-    return "השבוע של דני🗓️\n\n" + "\n".join(lines)
+    return "משחקי השבוע:\n\n" + "\n".join(lines)
 
 
 def week_post(gl: list) -> tuple:
@@ -870,7 +870,9 @@ def week_post(gl: list) -> tuple:
     # ‏התאריכים בתמונה הם התאריכים בפועל (משחק לילה ב-5:00 בבוקר של יום ראשון הבא שייך לשבוע הזה)
     first, last = gl[0]["tip"].astimezone(IL), gl[-1]["tip"].astimezone(IL)
     span = f"{first.day}.{first.month}" + (f" – {last.day}.{last.month}" if last.date() != first.date() else "")
-    photo = card.week_card(team_look(gl[0]["us"]["id"]), "השבוע של דני", span,
+    # ‏שם הקבוצה מהלוח ולא קבוע, כדי שאחרי טרייד הכותרת תתעדכן לבד
+    title = f"השבוע הקרוב של דני ו{team_he(gl[0]['us']['abbr'])}"
+    photo = card.week_card(team_look(gl[0]["us"]["id"]), title, span,
                            [{"date": date_he(g["tip"]), "time": clock(g["tip"]), "name": card_name(g["them"]["abbr"]),
                              "logo": team_look(g["them"]["id"])["logo"], "side": "בית" if g["home"] else "חוץ",
                              "tv": tv or ""} for g, tv in rows])

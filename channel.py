@@ -437,13 +437,16 @@ def save_state(state: dict) -> None:
 # ---------------------------------------------------------------- שלבים
 
 def tv_for(game: dict, gs: dict) -> Optional[str]:
-    """‏בחירה של איתמר גוברת על הזיהוי האוטומטי. ‏"" = בחר «בלי ערוץ»."""
+    """‏בחירה של איתמר גוברת על הזיהוי האוטומטי. ‏"" = בחר «בלי ערוץ». ‏אם ספורט 5 לא עונה
+    בשעת הפרסום, נשאר הערוץ שזוהה בטיוטה (2.11.26: בטיוטה היה ערוץ, בפרסום נעלם)."""
     if "tv" in gs:
         return gs["tv"]
     try:
-        return sport5_channel(game)
-    except Exception:
-        return None
+        found = sport5_channel(game)
+    except Exception as e:
+        print("ספורט 5 לא זמין:", type(e).__name__)
+        found = None
+    return found or gs.get("tv_auto")
 
 
 def card_for(game: dict, status: tuple) -> bytes:

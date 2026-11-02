@@ -134,6 +134,15 @@ class Sport5(unittest.TestCase):
     def test_time_mismatch(self):
         self.assertIsNone(channel.sport5_channel(game(tip="2026-10-28T09:00:00+00:00"), SPORT5))
 
+    def test_publish_keeps_draft_channel(self):
+        """‏ספורט 5 לא עונה (או לא מוצא) בשעת הפרסום: נשאר הערוץ מהטיוטה."""
+        with mock.patch.object(channel, "sport5_channel", side_effect=OSError("timeout")):
+            self.assertEqual(channel.tv_for(game(), {"tv_auto": "ספורט 5"}), "ספורט 5")
+        with mock.patch.object(channel, "sport5_channel", return_value=None):
+            self.assertEqual(channel.tv_for(game(), {"tv_auto": "ספורט 5"}), "ספורט 5")
+            self.assertEqual(channel.tv_for(game(), {"tv_auto": "ספורט 5", "tv": ""}), "")
+            self.assertIsNone(channel.tv_for(game(), {}))
+
 
 class Flow(unittest.TestCase):
     """‏process() מול זמנים ומצבים שונים. ‏tg נאסף לרשימה במקום לשלוח."""

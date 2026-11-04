@@ -1094,6 +1094,9 @@ def handle_updates(state: dict, games: list) -> None:
             if gid == "wk":
                 weekly_answer(state, action)
                 continue
+            if gid == "art":
+                art_answer(state, action, q.get("message") or {})
+                continue
             gs = state["games"].get(gid)
             if not gs or gs.get("preview"):
                 continue
@@ -1230,6 +1233,41 @@ def announce_answer(state: dict, action: str) -> None:
                                       "reply_markup": {"inline_keyboard": []}})
         tg("sendMessage", {"chat_id": ADMIN, "text": "✅ פורסם בערוץ" if action == "go" else "🚫 בוטל",
                            "reply_parameters": {"message_id": ann["draft"]}})
+    except Exception as e:
+        print("עדכון טיוטה נכשל:", e)
+
+
+# ---------------------------------------------------------------- כתבות
+# ‏הכתבות נכתבות על המק של איתמר (tool/writer.py), שם גם נשלחת הטיוטה. ‏הריפו ציבורי, לכן הטקסט לא
+# ‏נשמר בו ולא במצב: הוא נמצא רק בהודעת הטיוטה עצמה, ומשם הוא מתפרסם כשאיתמר לוחץ.
+
+def art_text(draft: str) -> str:
+    """‏הכתבה מתוך הודעת הטיוטה: בלי שורת הטיוטה שמעליה, עם כותרת מודגשת."""
+    _, _, article = draft.partition("\n\n")
+    title, _, body = article.strip().partition("\n")
+    return f"<b>{html.escape(title.strip())}</b>\n{html.escape(body)}" if body else ""
+
+
+def art_answer(state: dict, action: str, msg: dict) -> None:
+    mid = msg.get("message_id")
+    done = state.setdefault("art_done", [])
+    if not mid or mid in done:  # ‏לחיצה כפולה: הריצות כל 5 דקות, אז שתי לחיצות יכולות להגיע יחד
+        return
+    if action == "go":
+        text = art_text(msg.get("text", ""))
+        if not text:
+            tg("sendMessage", {"chat_id": ADMIN, "text": "⚠️ לא הצלחתי לקרוא את הטיוטה, ולא פורסם כלום",
+                               "reply_parameters": {"message_id": mid}})
+            return
+        tg("sendMessage", {"chat_id": CHANNEL, "text": text, "parse_mode": "HTML"})
+        print("נשלח")
+    done.append(mid)
+    del done[:-100]
+    save_state(state)
+    try:
+        tg("editMessageReplyMarkup", {"chat_id": ADMIN, "message_id": mid, "reply_markup": {"inline_keyboard": []}})
+        tg("sendMessage", {"chat_id": ADMIN, "text": "✅ פורסם בערוץ" if action == "go" else "🚫 לא יפורסם",
+                           "reply_parameters": {"message_id": mid}})
     except Exception as e:
         print("עדכון טיוטה נכשל:", e)
 

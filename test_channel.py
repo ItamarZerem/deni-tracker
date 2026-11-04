@@ -660,5 +660,53 @@ class Announce(unittest.TestCase):
             self.assertEqual(sent.count(("sendPhoto", "@chan")), 1)
 
 
+class Article(unittest.TestCase):
+    DRAFT = "📝 טיוטה · כתבה לפני המשחק\n\nכותרת <הכתבה>\nפסקה ראשונה\n\nפסקה שנייה"
+
+    def setUp(self):
+        self.sent = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for p in [mock.patch.object(channel, "STATE_PATH", os.path.join(tmp.name, "s.json")),
+                  mock.patch.object(channel, "ADMIN", "111"), mock.patch.object(channel, "CHANNEL", "@chan"),
+                  mock.patch.object(channel, "tg", lambda m, p, photo=None: self.sent.append((m, p)) or {})]:
+            p.start()
+        self.addCleanup(mock.patch.stopall)
+        self.state = {"offset": 0, "games": {}}
+
+    def in_channel(self):
+        return [p["text"] for _, p in self.sent if p.get("chat_id") == "@chan"]
+
+    def test_text_drops_draft_line_and_escapes(self):
+        self.assertEqual(channel.art_text(self.DRAFT), "<b>כותרת &lt;הכתבה&gt;</b>\nפסקה ראשונה\n\nפסקה שנייה")
+
+    def test_published_only_after_go_and_once(self):
+        msg = {"message_id": 9, "text": self.DRAFT}
+        channel.art_answer(self.state, "go", msg)
+        channel.art_answer(self.state, "go", msg)
+        self.assertEqual(len(self.in_channel()), 1)
+        self.assertNotIn("טיוטה", self.in_channel()[0])
+
+    def test_reject_publishes_nothing(self):
+        channel.art_answer(self.state, "no", {"message_id": 9, "text": self.DRAFT})
+        self.assertEqual(self.in_channel(), [])
+        channel.art_answer(self.state, "go", {"message_id": 9, "text": self.DRAFT})
+        self.assertEqual(self.in_channel(), [])
+
+    def test_unreadable_draft_stays_open(self):
+        channel.art_answer(self.state, "go", {"message_id": 9})
+        self.assertEqual(self.in_channel(), [])
+        channel.art_answer(self.state, "go", {"message_id": 9, "text": self.DRAFT})
+        self.assertEqual(len(self.in_channel()), 1)
+
+    def test_stranger_button_ignored(self):
+        with mock.patch.object(channel, "tg", lambda m, p, photo=None: [
+                {"update_id": 1, "callback_query": {"id": "q", "from": {"id": 999}, "data": "art|go",
+                                                    "message": {"message_id": 9, "text": self.DRAFT}}}]
+                if m == "getUpdates" else self.sent.append((m, p)) or {}):
+            channel.handle_updates(self.state, [])
+        self.assertEqual(self.in_channel(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

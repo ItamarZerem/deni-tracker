@@ -214,5 +214,71 @@ class Feeds(unittest.TestCase):
         self.assertEqual([i["title"] for i in items if writer.about_deni(i)], ["אבדיה"])
 
 
+def sgame(tip, abbr, gid, home=True):
+    return {"id": gid, "tip": tip, "home": home, "neutral": False, "type": 2,
+            "us": {"id": "22", "abbr": "POR"}, "them": {"id": "25", "abbr": abbr}}
+
+
+class Schedule(unittest.TestCase):
+    """11.11.26: שני משחקים רצופים מול אוקלהומה, והסיכום כתב «ברביעי» על משחק שהיה באותו לילה."""
+
+    def setUp(self):
+        self.games = [sgame(dt.datetime(2026, 11, 8, 3, 0, tzinfo=UTC), "SA", "0"),
+                      sgame(dt.datetime(2026, 11, 11, 4, 0, tzinfo=UTC), "OKC", "1"),   # רביעי 6:00
+                      sgame(dt.datetime(2026, 11, 12, 3, 0, tzinfo=UTC), "OKC", "2"),   # חמישי 5:00
+                      sgame(dt.datetime(2026, 11, 14, 3, 0, tzinfo=UTC), "SAC", "3", home=False)]
+        for a, b in zip(self.games, self.games[1:]):
+            b["prev"] = a
+        patches = [mock.patch.object(writer, "last_game_of", return_value=None),
+                   mock.patch.object(writer, "missed_streak", return_value=0)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_recap_knows_next_is_tonight(self):
+        text = writer.schedule_text("recap", self.games[1], self.games, dt.datetime(2026, 11, 11, 10, 0, tzinfo=UTC))
+        self.assertIn("המשחק הזה היה הבוקר (6:00)", text)
+        self.assertIn("המשחק הבא: הלילה (5:00), בבית מול אוקלהומה סיטי. ⚡ כבר בלילה שאחרי, שוב מול אותה יריבה.", text)
+        self.assertIn("המפגש ה-1 מתוך 2", text)
+
+    def test_preview_knows_back_to_back(self):
+        text = writer.schedule_text("preview", self.games[2], self.games, dt.datetime(2026, 11, 11, 20, 0, tzinfo=UTC))
+        self.assertIn("המשחק הזה: הלילה (5:00, בין רביעי לחמישי)", text)
+        self.assertIn("המשחק הקודם של פורטלנד: הבוקר (6:00)", text)
+        self.assertIn("משחק שני בשני לילות רצופים", text)
+        self.assertIn("ושוב מול אותה יריבה", text)
+
+    def test_extras(self):
+        with mock.patch.object(writer, "missed_streak", return_value=3), \
+                mock.patch.object(writer, "last_game_of", return_value=dt.datetime(2026, 11, 7, 3, 0, tzinfo=UTC)):
+            text = writer.schedule_text("preview", self.games[3], self.games, dt.datetime(2026, 11, 13, 20, 0, tzinfo=UTC))
+        self.assertIn("דני לא שיחק ב-3 המשחקים האחרונים", text)
+        self.assertIn("סקרמנטו: המשחק הקודם שלה היה לפני 7 ימים.", text)
+        wsh = sgame(dt.datetime(2026, 12, 26, 3, 0, tzinfo=UTC), "WSH", "9")
+        self.assertIn("הקבוצה הקודמת של דני", writer.schedule_text("preview", wsh, [wsh], wsh["tip"] - 7 * H))
+
+    def test_past_word(self):
+        tip = dt.datetime(2026, 11, 10, 3, 0, tzinfo=UTC)  # שלישי 5:00
+        at = lambda d, h: dt.datetime(2026, 11, d, h, 0, tzinfo=writer.channel.IL)
+        self.assertEqual(writer.past_word(tip, at(10, 12)), "הלילה (5:00)")
+        self.assertEqual(writer.past_word(tip, at(10, 22)), "בלילה שעבר (5:00)")
+        self.assertEqual(writer.past_word(tip, at(11, 12)), "בין שני לשלישי (5:00)")
+        self.assertEqual(writer.past_word(dt.datetime(2026, 11, 10, 18, 0, tzinfo=UTC), at(11, 12)), "אתמול בערב (20:00)")
+
+
+class ChannelPage(unittest.TestCase):
+    def test_articles_only_since(self):
+        page = ('<div class="tgme_widget_message_text js-message_text" dir="auto">קצר</div>'
+                '<time datetime="2026-11-11T09:00:00+00:00">'
+                '<div class="tgme_widget_message_text js-message_text" dir="auto"><b>כותרת</b><br/>' + "מילה " * 200 +
+                '</div><time datetime="2026-11-11T10:20:00+00:00">'
+                '<div class="tgme_widget_message_text js-message_text" dir="auto"><b>ישנה</b><br/>' + "מילה " * 200 +
+                '</div><time datetime="2026-11-01T10:20:00+00:00">')
+        with mock.patch.object(writer, "fetch", return_value=page.encode()):
+            text = writer.channel_articles(dt.datetime(2026, 11, 9, tzinfo=UTC))
+        self.assertTrue(text.startswith("### פורסם יום רביעי 11.11 12:20\nכותרת\nמילה"), text[:60])
+        self.assertNotIn("ישנה", text)
+
+
 if __name__ == "__main__":
     unittest.main()

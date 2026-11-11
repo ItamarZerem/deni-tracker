@@ -114,11 +114,38 @@ def game_day(tip: dt.datetime) -> dt.date:
     return (tip.astimezone(IL) - dt.timedelta(hours=8)).date()
 
 
-def when_word(tip: dt.datetime) -> str:
-    h = tip.astimezone(IL).hour
-    if h < 8 or h >= 21:
-        return "הלילה"
-    return "היום" if h < 17 else "הערב"
+B2B = dt.timedelta(hours=30)  # ‏משחקים ברצף («יום אחרי»): הבא מתחיל פחות מ-30 שעות אחרי הקודם
+
+
+def when_word(tip: dt.datetime, now: Optional[dt.datetime] = None) -> str:
+    """‏«הלילה» / «מחר בבוקר» / «הערב», ביחס לרגע שבו ההודעה נקראת (now, ברירת מחדל: עכשיו).
+    ‏משחק ב-6:00 או ב-7:00 הוא «בבוקר» ולא «הלילה» (איתמר, 11.11.26). ‏«היום» של now מתחלף
+    ב-5:00, כך שהודעה ב-3:00 על משחק ב-5:00 עדיין אומרת «הלילה»."""
+    il, ref = tip.astimezone(IL), (now or now_utc()).astimezone(IL)
+    h = il.hour
+    if 6 <= h < 8:
+        return "הבוקר" if ref.date() >= il.date() else "מחר בבוקר"
+    night = h < 6 or h >= 23
+    days = ((il - dt.timedelta(hours=8) if night else il).date()
+            - (ref - dt.timedelta(hours=5)).date()).days
+    if night:
+        return "הלילה" if days <= 0 else "מחר בלילה" if days == 1 else day_phrase(tip)
+    word = "היום" if h < 17 else "הערב"
+    return word if days <= 0 else ("מחר" if h < 17 else "מחר בערב") if days == 1 else day_phrase(tip)
+
+
+def b2b(first: Optional[dict], second: Optional[dict]) -> bool:
+    return bool(first and second) and second["tip"] - first["tip"] < B2B
+
+
+def same_rival(first: Optional[dict], second: Optional[dict]) -> bool:
+    return bool(first and second) and first["them"]["abbr"] == second["them"]["abbr"]
+
+
+def gap_words(first: dict, second: dict) -> str:
+    """‏«יום אחרי» / «יומיים אחרי», לפי הימים בלוח (משחק לילה שייך ליום שלפניו)."""
+    days = (game_day(second["tip"]) - game_day(first["tip"])).days
+    return "יום אחרי" if days <= 1 else "יומיים אחרי" if days == 2 else ""
 
 
 def clock(t: dt.datetime) -> str:
@@ -153,7 +180,10 @@ def schedule(team_id: str) -> list:
                 "neutral": bool(c.get("neutralSite")), "type": st,
                 "us": sides["home" if home else "away"], "them": sides["away" if home else "home"],
             }
-    return sorted(games.values(), key=lambda g: g["tip"])
+    out = sorted(games.values(), key=lambda g: g["tip"])
+    for a, b in zip(out, out[1:]):  # ‏«שוב» ו«יום אחרי» בהודעת המשחק
+        b["prev"] = {k: a[k] for k in ("id", "tip", "home", "neutral", "us", "them")}
+    return out
 
 
 def team_look(team_id: str) -> dict:
@@ -247,13 +277,24 @@ def count(n, one: str, many: str) -> str:
 
 
 def opening(game: dict) -> str:
+    """‏שורת הפתיחה, כפי שתיקרא בשעת הפרסום. ‏משחקים ברצף ואותה יריבה פעמיים מקבלים
+    התייחסות («שוב», «יום אחרי»), כדי שההודעה לא תישמע כאילו אף אחד לא שם לב."""
     us, them = team_he(game["us"]["abbr"]), team_he(game["them"]["abbr"])
-    when = f"{when_word(game['tip'])} ({clock(game['tip'])})"
+    when = f"{when_word(game['tip'], preview_at(game['tip']))} ({clock(game['tip'])})"
+    prev = game.get("prev")
+    again = "שוב " if same_rival(prev, game) else ""
     if game["neutral"]:
-        return f"{us} ודני פוגשים {when} את {them}🏀"
-    if game["home"]:
-        return f"{us} ודני מארחים {when} את {them}🏀"
-    return f"{us} ודני מתארחים {when} אצל {them}🏀"
+        line = f"{us} ודני פוגשים {again}{when} את {them}"
+    elif game["home"]:
+        line = f"{us} ודני מארחים {again}{when} את {them}"
+    else:
+        line = f"{us} ודני מתארחים {again}{when} אצל {them}"
+    gap = gap_words(prev, game) if prev else ""
+    if again and gap:
+        line += f", {gap} המשחק הקודם ביניהן"
+    elif b2b(prev, game):
+        line += f", {gap} המשחק מול {team_he(prev['them']['abbr'])}"
+    return line + "🏀"
 
 
 def on_tv(tv: str) -> str:
@@ -334,25 +375,50 @@ def day_phrase(tip: dt.datetime) -> str:
     names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
     il = tip.astimezone(IL)
     day = names[il.weekday()]
-    if il.hour < 8:
+    if il.hour < 6:
         return f"בין {names[(il.weekday() - 1) % 7]} ל{day}"
+    if il.hour < 8:  # ‏6:00 ו-7:00 הם בוקר, לא לילה
+        return "בשבת בבוקר" if day == "שבת" else f"ביום {day} בבוקר"
     return "בשבת" if day == "שבת" else f"ביום {day}"
 
 
-def next_game_line(nxt: dict) -> str:
-    """‏«משחק הבא בין שני לשלישי (5:00) נגד דנבר (בחוץ)». ‏משחק לילה נקרא לפי שני הימים."""
+def next_game_line(nxt: dict, game: Optional[dict] = None, now: Optional[dt.datetime] = None) -> str:
+    """‏«משחק הבא בין שני לשלישי (5:00) נגד דנבר (בחוץ)». ‏משחק לילה נקרא לפי שני הימים.
+    ‏אחרי משחק (game), כשהבא כבר מחר: «משחק הבא כבר הלילה (5:00), שוב נגד אוקלהומה סיטי (בבית)»."""
     side = "בבית" if nxt["home"] else "בחוץ"
-    return f"משחק הבא {day_phrase(nxt['tip'])} ({clock(nxt['tip'])}) נגד {team_he(nxt['them']['abbr'])} ({side})"
+    again = "שוב " if same_rival(game, nxt) else ""
+    if b2b(game, nxt):
+        when = when_word(nxt["tip"], now)
+        return f"משחק הבא כבר {when} ({clock(nxt['tip'])}), {again}נגד {team_he(nxt['them']['abbr'])} ({side})"
+    return f"משחק הבא {day_phrase(nxt['tip'])} ({clock(nxt['tip'])}) {again}נגד {team_he(nxt['them']['abbr'])} ({side})"
+
+
+def pair_line(game: dict, won: bool, prev_won: Optional[bool]) -> str:
+    """‏המשחק השני מול אותה יריבה, יום-יומיים אחרי הראשון: שורה שמחברת בין השניים."""
+    prev = game.get("prev")
+    if prev_won is None or not same_rival(prev, game) or not gap_words(prev, game):
+        return ""
+    us, them, gap = team_he(game["us"]["abbr"]), team_he(game["them"]["abbr"]), gap_words(prev, game)
+    if won and prev_won:
+        return f"ניצחון שני ברצף על {them}"
+    if not won and not prev_won:
+        return f"הפסד שני ברצף {le(them)}"
+    if won:
+        return f"{gap} ההפסד, {us} מחזירה {le(them)}"
+    return f"{gap} הניצחון, {them} מחזירה {le(us)}"
 
 
 def final_text(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict],
-               nxt: Optional[dict]) -> str:
+               nxt: Optional[dict], prev_won: Optional[bool] = None) -> str:
     us, them = team_he(game["us"]["abbr"]), team_he(game["them"]["abbr"])
     extra = "" if not ot else " אחרי הארכה" if ot == 1 else f" אחרי {ot} הארכות"
     if ours > theirs:
         lines = [f"דני בניצחון {score(ours, theirs)} של {us} על {them}{extra}🔥"]
     else:
         lines = [f"{us} מפסידה {le(them)} {score(ours, theirs)}{extra}"]
+    pair = pair_line(game, ours > theirs, prev_won)
+    if pair:
+        lines.append(pair)
     if minutes(row):
         lines += ["דני מסיים את המשחק עם"] + stats_lines(row, full=True)
     else:
@@ -361,7 +427,7 @@ def final_text(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict],
             r = "החלטת המאמן"
         lines.append("דני לא שיחק" + (f" ({r})" if r else ""))
     if nxt:
-        lines += ["", next_game_line(nxt)]
+        lines += ["", next_game_line(nxt, game)]
     return "\n".join(lines)
 
 
@@ -455,7 +521,7 @@ def card_for(game: dict, status: tuple) -> bytes:
     return card.preview_card(
         {"name": card_name(us["abbr"]), **team_look(us["id"])},
         {"name": card_name(them["abbr"]), **team_look(them["id"])},
-        f"{when_word(game['tip'])} {clock(game['tip'])}", date_he(game["tip"]),
+        f"{when_word(game['tip'], preview_at(game['tip']))} {clock(game['tip'])}", date_he(game["tip"]),
         SEASON_LABEL.get(game["type"], ""),
         {"Questionable": "בספק למשחק", "Doubtful": "בספק גדול", "Out": "לא ישחק"}.get(status[0], ""),
         tracker.ICON,
@@ -599,11 +665,24 @@ def final_card(game: dict, ours: int, theirs: int, ot: int, row: Optional[dict])
                            ours, theirs, title, chip, tracker.ICON)
 
 
+def prev_result(game: dict) -> Optional[bool]:
+    """‏האם ניצחנו במשחק הקודם, רק כשהוא היה מול אותה יריבה ממש לפני. ‏בתקלה: None, והשורה לא נכתבת."""
+    prev = game.get("prev")
+    if not same_rival(prev, game) or not gap_words(prev, game):
+        return None
+    try:
+        ours, theirs, _ = scores(get_json(f"{ESPN}/summary?event={prev['id']}"), prev)
+    except Exception as e:
+        print("המשחק הקודם לא זמין:", type(e).__name__)
+        return None
+    return ours > theirs if ours != theirs else None
+
+
 def publish_final(game: dict, data: dict, nxt: Optional[dict]) -> None:
     """‏הודעת הסיום, עם תמונת התוצאה. ‏אם התמונה נכשלת - הטקסט יוצא בלעדיה."""
     ours, theirs, ot = scores(data, game)
     row = deni_box(data)
-    text = final_text(game, ours, theirs, ot, row, nxt)
+    text = final_text(game, ours, theirs, ot, row, nxt, prev_result(game))
     try:
         photo = final_card(game, ours, theirs, ot, row)
     except Exception as e:
@@ -861,7 +940,8 @@ def week_text(rows: list) -> str:
     lines = []
     for g, tv in rows:
         side = "בבית" if g["home"] else "בחוץ"
-        line = f"🔸 {day_phrase(g['tip'])} ({clock(g['tip'])}) נגד {team_he(g['them']['abbr'])} ({side})"
+        again = "שוב " if same_rival(g.get("prev"), g) and b2b(g.get("prev"), g) else ""
+        line = f"🔸 {day_phrase(g['tip'])} ({clock(g['tip'])}) {again}נגד {team_he(g['them']['abbr'])} ({side})"
         lines.append(line + (f" · {tv}" if tv else ""))
     return "משחקי השבוע:\n\n" + "\n".join(lines)
 

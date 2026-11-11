@@ -708,5 +708,76 @@ class Article(unittest.TestCase):
         self.assertEqual(self.in_channel(), [])
 
 
+class BackToBack(unittest.TestCase):
+    """‏11.11.26: שני משחקים רצופים מול אוקלהומה, הראשון ב-6:00. ‏ההודעות לא התייחסו לזה."""
+
+    def pair(self, home2=True, abbr2="OKC"):
+        first = game(tip="2026-11-11T04:00:00+00:00", home=True, abbr="OKC", gid="1")  # ‏רביעי 6:00
+        second = game(tip="2026-11-12T03:00:00+00:00", home=home2, abbr=abbr2, gid="2")  # ‏חמישי 5:00
+        second["prev"] = first
+        return first, second
+
+    def test_morning_game(self):
+        first, _ = self.pair()
+        self.assertEqual(channel.when_word(first["tip"], channel.preview_at(first["tip"])), "מחר בבוקר")
+        self.assertEqual(channel.when_word(first["tip"], first["tip"] - dt.timedelta(hours=1)), "הבוקר")
+        self.assertEqual(channel.opening(first), "פורטלנד ודני מארחים מחר בבוקר (6:00) את אוקלהומה סיטי🏀")
+        self.assertEqual(channel.day_phrase(first["tip"]), "ביום רביעי בבוקר")
+
+    def test_night_reference(self):
+        tip = dt.datetime(2026, 11, 12, 3, 0, tzinfo=UTC)  # ‏חמישי 5:00
+        il = lambda h, d=11: dt.datetime(2026, 11, d, h, 0, tzinfo=channel.IL)
+        self.assertEqual(channel.when_word(tip, il(9)), "הלילה")
+        self.assertEqual(channel.when_word(tip, il(3, 12)), "הלילה")
+        self.assertEqual(channel.when_word(tip, il(23, 10)), "מחר בלילה")
+        self.assertEqual(channel.when_word(dt.datetime(2026, 10, 31, 20, 30, tzinfo=UTC),
+                                           dt.datetime(2026, 10, 31, 12, 0, tzinfo=channel.IL)), "הערב")  # ‏22:30
+
+    def test_opening_same_rival(self):
+        _, second = self.pair()
+        self.assertEqual(channel.opening(second),
+                         "פורטלנד ודני מארחים שוב הלילה (5:00) את אוקלהומה סיטי, יום אחרי המשחק הקודם ביניהן🏀")
+
+    def test_opening_other_rival(self):
+        _, second = self.pair(home2=False, abbr2="MIN")
+        self.assertEqual(channel.opening(second),
+                         "פורטלנד ודני מתארחים הלילה (5:00) אצל מינסוטה, יום אחרי המשחק מול אוקלהומה סיטי🏀")
+
+    def test_opening_no_b2b(self):
+        g = game()
+        g["prev"] = game(tip="2026-10-24T03:00:00+00:00", abbr="SAC")
+        self.assertEqual(channel.opening(g), "פורטלנד ודני מתארחים הלילה (5:00) אצל הלייקרס🏀")
+
+    def test_final_next_tonight(self):
+        first, second = self.pair()
+        with mock.patch.object(channel, "now_utc", return_value=first["tip"] + dt.timedelta(hours=2, minutes=30)):
+            text = channel.final_text(first, 100, 108, 0, channel.deni_box(summary(deni=PLAYED)), second)
+        self.assertTrue(text.endswith("משחק הבא כבר הלילה (5:00), שוב נגד אוקלהומה סיטי (בבית)"), text)
+
+    def test_pair_lines(self):
+        _, second = self.pair()
+        row = channel.deni_box(summary(deni=PLAYED))
+        line = lambda ours, theirs, prev_won: channel.final_text(second, ours, theirs, 0, row, None, prev_won).split("\n")[1]
+        self.assertEqual(line(110, 100, False), "יום אחרי ההפסד, פורטלנד מחזירה לאוקלהומה סיטי")
+        self.assertEqual(line(100, 110, True), "יום אחרי הניצחון, אוקלהומה סיטי מחזירה לפורטלנד")
+        self.assertEqual(line(110, 100, True), "ניצחון שני ברצף על אוקלהומה סיטי")
+        self.assertEqual(line(100, 110, False), "הפסד שני ברצף לאוקלהומה סיטי")
+        self.assertEqual(line(110, 100, None), "דני מסיים את המשחק עם")  # ‏בלי המשחק הקודם: בלי השורה
+
+    def test_schedule_links_prev(self):
+        events = [{"id": i, "date": d, "competitions": [{"competitors": [
+            {"homeAway": "home", "team": {"id": "22", "abbreviation": "POR"}},
+            {"homeAway": "away", "team": {"id": "25", "abbreviation": "OKC"}}]}]}
+            for i, d in (("2", "2026-11-12T03:00Z"), ("1", "2026-11-11T04:00Z"))]
+        with mock.patch.object(channel, "get_json", side_effect=[{"events": events}, {}, {}]):
+            games = channel.schedule("22")
+        self.assertNotIn("prev", games[0])
+        self.assertEqual(games[1]["prev"]["id"], "1")
+
+    def test_week_again(self):
+        _, second = self.pair()
+        self.assertIn("שוב נגד אוקלהומה סיטי", channel.week_text([(second, None)]))
+
+
 if __name__ == "__main__":
     unittest.main()

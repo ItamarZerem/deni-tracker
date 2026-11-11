@@ -67,6 +67,8 @@ PORTLAND = [
     ("Hoops Rumors", "https://www.hoopsrumors.com/portland-trail-blazers/feed"),
 ]
 NBA_TEAM_NEWS = "https://www.nba.com/blazers/api/content/category/news?page=1"
+CHANNEL_PAGE = "https://t.me/s/{}"  # ‏הדף הציבורי של הערוץ: הכתבות כפי שפורסמו, כולל תיקונים של איתמר
+FORMER_TEAMS = {"WSH": "וושינגטון היא הקבוצה הקודמת של דני: נבחר אליה בדראפט 2020, שיחק בה ארבע עונות ועבר לפורטלנד ב-2024."}
 
 
 def step(text: str) -> None:
@@ -224,6 +226,124 @@ def deni_recent(before: dt.datetime, count: int = 5) -> str:
     return "\n".join(r for _, r in sorted(rows)[-count:]) or "אין נתונים"
 
 
+def past_word(tip: dt.datetime, ref: dt.datetime) -> str:
+    """‏משחק שכבר היה, ביחס ל-ref: «הלילה» / «הבוקר» / «אתמול בערב», ומעבר לזה «בין שלישי לרביעי (5:00)».
+    ‏«אתמול בלילה» לא נכתב, כי לא ברור על איזה לילה מדובר."""
+    t, r = tip.astimezone(channel.IL), ref.astimezone(channel.IL)
+    exact = f"{channel.day_phrase(tip)} ({channel.clock(tip)})"
+    if t.hour < 6 or t.hour >= 23:  # ‏משחק לילה, נקרא לפי הבוקר שאחריו
+        days = (r.date() - (t + 2 * H).date()).days
+        return exact if days else f"הלילה ({channel.clock(tip)})" if r.hour < 17 else f"בלילה שעבר ({channel.clock(tip)})"
+    days = (r.date() - t.date()).days
+    word = "הבוקר" if t.hour < 8 else "היום" if t.hour < 17 else "הערב"
+    if days == 0:
+        return f"{word} ({channel.clock(tip)})"
+    if days == 1 and t.hour >= 8:
+        return f"אתמול{' בערב' if t.hour >= 17 else ''} ({channel.clock(tip)})"
+    return exact
+
+
+def place(g: dict) -> str:
+    them = channel.team_he(g["them"]["abbr"])
+    return f"במגרש ניטרלי מול {them}" if g.get("neutral") else f"בבית מול {them}" if g["home"] else f"בחוץ, אצל {them}"
+
+
+def last_game_of(team_id: str, before: dt.datetime) -> Optional[dt.datetime]:
+    season = os.environ.get("DENI_SEASON")
+    url = f"{tracker.ESPN}/teams/{team_id}/schedule?seasontype=2" + (f"&season={season}" if season else "")
+    tips = [tracker.parse_time(e["date"]) for e in tracker.get_json(url).get("events", [])]
+    return max((t for t in tips if t < before - H), default=None)
+
+
+def missed_streak(games: list, before: dt.datetime) -> int:
+    """‏בכמה משחקים אחרונים של הקבוצה, ברצף, דני לא שיחק. ‏היומן של ESPN כולל רק משחקים ששיחק בהם."""
+    season = os.environ.get("DENI_SEASON")
+    url = f"{tracker.ESPN_WEB}/athletes/{tracker.PLAYER_ID}/gamelog" + (f"?season={season}" if season else "")
+    d = tracker.get_json(url)
+    played = {str(e["eventId"]) for st in d.get("seasonTypes", []) for c in st.get("categories", [])
+              for e in c.get("events", [])}
+    n = 0
+    for g in reversed([g for g in games if g["tip"] < before - 3 * H]):
+        if g["id"] in played:
+            break
+        n += 1
+    return n
+
+
+def schedule_text(mode: str, game: dict, games: list, ref: dt.datetime) -> str:
+    """‏הימים והשעות בשעון ישראל, ומה מיוחד במיקום של המשחק בלוח. ‏המקורות באנגלית כותבים לפי
+    היום בארה״ב («Wednesday»), ובלי הבלוק הזה הכתבה כתבה «ברביעי» על משחק שהוא הלילה (11.11.26)."""
+    i = next(k for k, g in enumerate(games) if g["id"] == game["id"])
+    prev = games[i - 1] if i else None
+    nxt = games[i + 1] if i + 1 < len(games) else None
+    us, them = channel.team_he(game["us"]["abbr"]), channel.team_he(game["them"]["abbr"])
+    lines = [f"עכשיו בישראל: {channel.date_he(ref)}, {channel.clock(ref)}. הכתבה תתפרסם בשעות הקרובות."]
+    if mode == "preview":
+        lines.append(f"המשחק הזה: {channel.when_word(game['tip'], ref)} ({channel.clock(game['tip'])}, "
+                     f"{channel.day_phrase(game['tip'])}), {place(game)}.")
+    else:
+        lines.append(f"המשחק הזה היה {past_word(game['tip'], ref)}, {place(game)}.")
+    if prev:
+        gap = (game["tip"] - prev["tip"]).total_seconds() / 3600
+        line = f"המשחק הקודם של {us}: {past_word(prev['tip'], ref)}, {place(prev)}."
+        if channel.b2b(prev, game):
+            line += f" ⚡ זה משחק שני בשני לילות רצופים (כ-{round(gap)} שעות בין הפתיחות)"
+            line += ", ושוב מול אותה יריבה." if channel.same_rival(prev, game) else "."
+        elif channel.same_rival(prev, game):
+            line += f" ⚡ שוב מול אותה יריבה, {channel.gap_words(prev, game) or 'ברצף'}."
+        elif gap >= 96:
+            line += f" ⚡ הפסקה של {round(gap / 24)} ימים בלי משחק."
+        lines.append(line)
+    if nxt:
+        word = channel.when_word(nxt["tip"], ref) if mode == "recap" else channel.day_phrase(nxt["tip"])
+        line = f"המשחק הבא: {word} ({channel.clock(nxt['tip'])}), {place(nxt)}."
+        if channel.b2b(game, nxt):
+            line += " ⚡ כבר בלילה שאחרי" + (", שוב מול אותה יריבה." if channel.same_rival(game, nxt) else ".")
+        elif channel.same_rival(game, nxt):
+            line += " ⚡ שוב מול אותה יריבה."
+        lines.append(line)
+    meetings = [g for g in games if g["them"]["abbr"] == game["them"]["abbr"]]
+    k = next(n for n, g in enumerate(meetings, 1) if g["id"] == game["id"])
+    if len(meetings) > 1:
+        lines.append(f"זה המפגש ה-{k} מתוך {len(meetings)} העונה מול {them}.")
+    try:
+        last = last_game_of(game["them"]["id"], game["tip"])
+        rest = (game["tip"] - last).total_seconds() / 3600 if last else None
+        if rest is not None and not channel.same_rival(prev, game):
+            if rest < 30:
+                lines.append(f"גם {channel.le(them)} זה משחק שני בשני לילות.")
+            else:
+                rested = f"{them}: המשחק הקודם שלה היה לפני {round(rest / 24)} ימים."
+                lines.append(("⚡ " + rested + f" כלומר היא נחה, ו{us} לא.") if channel.b2b(prev, game) else rested)
+    except Exception:
+        pass
+    try:
+        missed = missed_streak(games, game["tip"])
+        if missed:
+            lines.append(f"⚡ דני לא שיחק ב-{missed} המשחקים האחרונים של {us} לפני המשחק הזה.")
+    except Exception:
+        pass
+    if game["them"]["abbr"] in FORMER_TEAMS:
+        lines.append("⚡ " + FORMER_TEAMS[game["them"]["abbr"]])
+    lines.append("שים לב: ימי השבוע במקורות באנגלית הם לפי שעון ארה״ב. «Wednesday» שם הוא בדרך כלל "
+                 "הלילה שבין רביעי לחמישי כאן. ימים ושעות בכתבה רק לפי הבלוק הזה.")
+    return "\n".join(l for l in lines if l)
+
+
+def channel_articles(since: dt.datetime) -> str:
+    """‏הכתבות שכבר פורסמו בערוץ מאז since, מהדף הציבורי (שם רואים גם תיקונים של איתמר).
+    ‏כתבה מזוהה לפי כותרת מודגשת ואורך."""
+    page = fetch(CHANNEL_PAGE.format(channel.CHANNEL.lstrip("@"))).decode("utf-8", "replace")
+    out = []
+    for body, when in re.findall(r'(?s)<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>.*?'
+                                 r'<time datetime="([^"]+)"', page):
+        t = parse_date(when)
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", body))).strip()
+        if t and t >= since and body.startswith("<b>") and len(text) > 600:
+            out.append(f"### פורסם {channel.date_he(t)} {channel.clock(t)}\n{text}")
+    return "\n\n".join(out[-3:])
+
+
 def injuries_text(summary: dict) -> str:
     out = []
     for team in summary.get("injuries", []):
@@ -263,16 +383,25 @@ def game_head(game: dict, teams: dict) -> str:
     return (f"המשחק: {teams.get(game['us']['id'], game['us']['abbr'])} מול "
             f"{teams.get(game['them']['id'], game['them']['abbr'])}, {side}. "
             f"שם היריבה בעברית: {channel.team_he(game['them']['abbr'])}. "
-            f"שעת הפתיחה: {game['tip']:%Y-%m-%d %H:%M} UTC. שלב: {channel.SEASON_LABEL.get(game['type'], '')}.")
+            f"שעת הפתיחה: {game['tip']:%Y-%m-%d %H:%M} UTC, "
+            f"כלומר {channel.date_he(game['tip'])} {channel.clock(game['tip'])} בשעון ישראל. "
+            f"שלב: {channel.SEASON_LABEL.get(game['type'], '')}.")
 
 
-def bundle(mode: str, game: dict, sample: bool) -> str:
+def bundle(mode: str, game: dict, sample: bool, games: Optional[list] = None) -> str:
     """חבילת החומרים ל-Claude. תקלה במקור אחד לא עוצרת את השאר."""
     summary = tracker.get_json(f"{tracker.ESPN}/summary?event={game['id']}")
     comp = summary.get("header", {}).get("competitions", [{}])[0]
     teams = {c["team"]["id"]: c["team"].get("displayName", "") for c in comp.get("competitors", [])}
     tip, now = game["tip"], tracker.now_utc()
     parts = [game_head(game, teams)]
+    # ‏בדוגמה על משחק ישן «עכשיו» הוא המועד שבו הכתבה הייתה נכתבת
+    ref = (tip - 7 * H if mode == "preview" else tip + 6 * H) if sample else now
+    if games:
+        try:
+            parts.append("## לוח הזמנים בשעון ישראל\n" + schedule_text(mode, game, games, ref))
+        except Exception as e:
+            print(f"{dt.datetime.now():%H:%M} לוח הזמנים לא זמין ({type(e).__name__})", flush=True)
 
     def add(title: str, fn, *args) -> None:
         try:
@@ -306,6 +435,9 @@ def bundle(mode: str, game: dict, sample: bool) -> str:
     add(f"בלוג הקבוצה של {us['abbr']}", lambda: fmt_items(BLOGS.get(us["abbr"], ""), blog_items(us["abbr"], start, end), 4))
     add(f"בלוג היריבה {them['abbr']}", lambda: fmt_items(BLOGS.get(them["abbr"], ""), blog_items(them["abbr"], start, end), 2))
     if not sample:  # המקורות האלה מכילים רק את הימים האחרונים, ואין להם ארכיון
+        prev = next((g for g in reversed(games or []) if g["tip"] < tip - H), None)
+        since = (prev["tip"] - 24 * H) if prev else tip - 72 * H
+        add("כתבות שכבר פורסמו בערוץ (לא לחזור עליהן)", channel_articles, since)
         if us["abbr"] == "POR":
             add("האתר של פורטלנד", lambda: fmt_items("nba.com/blazers", team_news(start, end), 6, 1000))
             for name, url in PORTLAND:
@@ -397,9 +529,11 @@ def draft_message(mode: str, game: dict, article: str) -> dict:
     }
 
 
-def find_game(game_id: str) -> dict:
+def find_game(game_id: str) -> tuple:
+    """‏(המשחק, כל לוח המשחקים)."""
     team = os.environ.get("DENI_TEAM") or tracker.current_team_id()
-    return next(g for g in channel.schedule(team) if g["id"] == game_id)
+    games = channel.schedule(team)
+    return next(g for g in games if g["id"] == game_id), games
 
 
 def main(argv: list) -> int:
@@ -412,7 +546,7 @@ def main(argv: list) -> int:
         return 0
     mode, game_id = argv[0], argv[1]
     sample_path = argv[3] if len(argv) > 3 and argv[2] == "--sample" else None
-    game = find_game(game_id)
+    game, games = find_game(game_id)
     drafts = os.path.join(BASE, "drafts")
     cached = os.path.join(drafts, f"{game_id}-{mode}.txt")
 
@@ -421,7 +555,7 @@ def main(argv: list) -> int:
             article = f.read()
     else:
         step("אוסף נתונים וכתבות")
-        material = bundle(mode, game, bool(sample_path))
+        material = bundle(mode, game, bool(sample_path), games)
         with open(os.path.join(ROOT, "tool", "writer_guide.md")) as f:
             guide = f.read()
         kind = "כתבה לפני המשחק" if mode == "preview" else "כתבה אחרי המשחק"
